@@ -144,19 +144,22 @@ export default function LoginPage() {
   }
 
   return (
-    <main
+    <main>
       style={{
         minHeight: "100svh",
+      maxWidth: "100%",
+boxSizing: "border-box",
         width: "100%",
         overflowX: "hidden",
         background:
           "linear-gradient(135deg,#eef4ff,#f8f5ff,#fff8f1)",
         padding: "20px 12px",
       }}
-    >      <div
+    >      </div>
         style={{
           width: "100%",
           maxWidth: "420px",
+    boxSizing: "border-box",
           margin: "0 auto",
         }}
       >
@@ -200,6 +203,7 @@ export default function LoginPage() {
         <div
           style={{
             width: "100%",
+            boxSizing: "border-box",
             background: "#ffffff",
             borderRadius: "24px",
             padding: "25px 18px",
