@@ -208,12 +208,14 @@ export default function Home() {
             </button>
 
             <button
-              style={styles.actionButton}
-              onClick={() => alert("Withdrawal system will be available soon.")}
-            >
-              💸
-              <span>Withdraw</span>
-            </button>
+  style={styles.actionButton}
+  onClick={() => {
+    window.location.href = "/withdraw";
+  }}
+>
+  💸
+  <span>Withdraw</span>
+</button>
 
             <button
               style={styles.actionButton}
