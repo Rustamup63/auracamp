@@ -27,6 +27,7 @@ type Campaign = {
   conversion_type: string | null;
   terms: string | null;
   image_url: string | null;
+  landing_url: string | null;
 };
 
 type Transaction = {
@@ -94,8 +95,8 @@ export default function Home() {
       const { data: campaignData } = await supabase
         .from("campaigns")
         .select(
-          "id, name, description, category, reward, conversion_type, terms, image_url"
-        )
+  "id, name, description, category, reward, conversion_type, terms, image_url, landing_url"
+)
         .eq("status", "active")
         .order("created_at", { ascending: false });
 
