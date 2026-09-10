@@ -1302,50 +1302,47 @@ export default function AdminPage() {
         style={textareaStyle}
       />
 
-      {/* ACTIONS */}
-      <div style={modalActions}>
-        <button
-          type="button"
-          disabled={
-            withdrawalAction ===
-            selectedWithdrawal.id
-          }
-          onClick={() =>
-            processWithdrawal(
-              selectedWithdrawal,
-              "reject"
-            )
-          }
-          style={rejectButton}
-        >
-          ❌ Reject
-        </button>
+         {/* ACTIONS */}
+<div style={modalActions}>
+  <button
+    type="button"
+    disabled={
+      withdrawalAction === selectedWithdrawal.id
+    }
+    onClick={() =>
+      processWithdrawal(
+        selectedWithdrawal,
+        "reject"
+      )
+    }
+    style={rejectButton}
+  >
+    ❌ Reject
+  </button>
 
-        <button
-          type="button"
-          disabled={
-            withdrawalAction ===
-            selectedWithdrawal.id
-          }
-          onClick={() =>
-            processWithdrawal(
-              selectedWithdrawal,
-              "approve"
-            )
-          }
-          style={approveButton}
-        >
-          {withdrawalAction ===
-          selectedWithdrawal.id
-            ? "Processing..."
-            : "✅ Approve"}
-        </button>
-      </div>
-    </div>
-  </div>
-       )}
-    </div>
-  </div>
+  <button
+    type="button"
+    disabled={
+      withdrawalAction === selectedWithdrawal.id
+    }
+    onClick={() =>
+      processWithdrawal(
+        selectedWithdrawal,
+        "approve"
+      )
+    }
+    style={approveButton}
+  >
+    {withdrawalAction === selectedWithdrawal.id
+      ? "Processing..."
+      : "✅ Approve"}
+  </button>
+</div>
+
+</div>
+</div>
+)}
+</div>
 </main>
 );
 }
