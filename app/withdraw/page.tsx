@@ -16,16 +16,40 @@ type Withdrawal = {
   created_at: string;
 };
 
+type SavedAccount = {
+  id: string;
+  method: "upi" | "bank";
+  account_name: string;
+  upi_id: string | null;
+  bank_name: string | null;
+  account_number: string | null;
+  ifsc_code: string | null;
+  is_default: boolean;
+};
+
 export default function WithdrawPage() {
   const [balance, setBalance] = useState(0);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
+  const [savedAccounts, setSavedAccounts] = useState<SavedAccount[]>([]);
+
   const [method, setMethod] = useState<"upi" | "bank">("upi");
+
   const [amount, setAmount] = useState("");
+
+  // UPI
   const [upiId, setUpiId] = useState("");
+
+  // Common
   const [accountName, setAccountName] = useState("");
+
+  // Bank
+  const [bankName, setBankName] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
   const [ifscCode, setIfscCode] = useState("");
+
   const [loading, setLoading] = useState(false);
+  const [savingAccount, setSavingAccount] = useState(false);
+  const [editingAccount, setEditingAccount] = useState(false);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -42,6 +66,7 @@ export default function WithdrawPage() {
       return;
     }
 
+    // Load wallet balance
     const { data: profile } = await supabase
       .from("profiles")
       .select("wallet_balance")
@@ -52,17 +77,182 @@ export default function WithdrawPage() {
       setBalance(Number(profile.wallet_balance || 0));
     }
 
-    const { data } = await supabase
+    // Load withdrawal history
+    const { data: withdrawalData } = await supabase
       .from("withdrawals")
       .select("id, amount, method, status, created_at")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(10);
 
-    setWithdrawals(data || []);
+    setWithdrawals(withdrawalData || []);
+
+    // Load saved payment accounts
+    const { data: accountData, error: accountError } =
+      await supabase
+        .from("withdrawal_accounts")
+        .select(
+          "id, method, account_name, upi_id, bank_name, account_number, ifsc_code, is_default"
+        )
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: true });
+
+    if (accountError) {
+      console.error(
+        "Saved account loading error:",
+        accountError
+      );
+      return;
+    }
+
+    setSavedAccounts(accountData || []);
+
+    // Automatically load selected method's saved account
+    const savedForMethod = (accountData || []).find(
+      (item) => item.method === method
+    );
+
+    if (savedForMethod) {
+      loadAccountIntoForm(savedForMethod);
+    }
   }
 
-  async function submitWithdrawal(e: React.FormEvent) {
+  function loadAccountIntoForm(account: SavedAccount) {
+    setAccountName(account.account_name || "");
+
+    if (account.method === "upi") {
+      setUpiId(account.upi_id || "");
+      setBankName("");
+      setAccountNumber("");
+      setIfscCode("");
+    } else {
+      setUpiId("");
+      setBankName(account.bank_name || "");
+      setAccountNumber(account.account_number || "");
+      setIfscCode(account.ifsc_code || "");
+    }
+
+    setEditingAccount(false);
+  }
+
+  function clearPaymentForm() {
+    setAccountName("");
+    setUpiId("");
+    setBankName("");
+    setAccountNumber("");
+    setIfscCode("");
+  }
+
+  function handleMethodChange(nextMethod: "upi" | "bank") {
+    setMethod(nextMethod);
+    setMessage("");
+    setEditingAccount(false);
+
+    const savedAccount = savedAccounts.find(
+      (account) => account.method === nextMethod
+    );
+
+    if (savedAccount) {
+      loadAccountIntoForm(savedAccount);
+    } else {
+      clearPaymentForm();
+    }
+  }
+
+  async function savePaymentAccount() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      window.location.href = "/login";
+      return;
+    }
+
+    if (!accountName.trim()) {
+      setMessage("Please enter account holder name.");
+      return;
+    }
+
+    if (method === "upi" && !upiId.trim()) {
+      setMessage("Please enter your UPI ID.");
+      return;
+    }
+
+    if (
+      method === "bank" &&
+      (!accountNumber.trim() || !ifscCode.trim())
+    ) {
+      setMessage("Please complete all bank details.");
+      return;
+    }
+
+    setSavingAccount(true);
+    setMessage("");
+
+    try {
+      const accountData = {
+        user_id: user.id,
+        method,
+        account_name: accountName.trim(),
+        upi_id: method === "upi" ? upiId.trim() : null,
+        bank_name:
+          method === "bank"
+            ? bankName.trim() || null
+            : null,
+        account_number:
+          method === "bank"
+            ? accountNumber.trim()
+            : null,
+        ifsc_code:
+          method === "bank"
+            ? ifscCode.trim().toUpperCase()
+            : null,
+        is_default: true,
+      };
+
+      const { data, error } = await supabase
+        .from("withdrawal_accounts")
+        .upsert(accountData, {
+          onConflict: "user_id,method",
+        })
+        .select(
+          "id, method, account_name, upi_id, bank_name, account_number, ifsc_code, is_default"
+        )
+        .single();
+
+      if (error) {
+        console.error("Save account error:", error);
+        setMessage(error.message);
+        return;
+      }
+
+      setSavedAccounts((previous) => {
+        const filtered = previous.filter(
+          (item) => item.method !== method
+        );
+
+        return [...filtered, data];
+      });
+
+      setEditingAccount(false);
+
+      setMessage(
+        method === "upi"
+          ? "UPI details saved successfully."
+          : "Bank details saved successfully."
+      );
+    } catch (error) {
+      console.error(error);
+      setMessage("Unable to save payment details.");
+    } finally {
+      setSavingAccount(false);
+    }
+  }
+
+  async function submitWithdrawal(
+    e: React.FormEvent
+  ) {
     e.preventDefault();
     setMessage("");
 
@@ -78,6 +268,12 @@ export default function WithdrawPage() {
       return;
     }
 
+    // Account name required for BOTH UPI and Bank
+    if (!accountName.trim()) {
+      setMessage("Please enter account holder name.");
+      return;
+    }
+
     if (method === "upi" && !upiId.trim()) {
       setMessage("Please enter your UPI ID.");
       return;
@@ -85,9 +281,7 @@ export default function WithdrawPage() {
 
     if (
       method === "bank" &&
-      (!accountName.trim() ||
-        !accountNumber.trim() ||
-        !ifscCode.trim())
+      (!accountNumber.trim() || !ifscCode.trim())
     ) {
       setMessage("Please complete all bank details.");
       return;
@@ -96,19 +290,88 @@ export default function WithdrawPage() {
     setLoading(true);
 
     try {
-      const { error } = await supabase.rpc("request_withdrawal", {
-        p_amount: numericAmount,
-        p_method: method,
-        p_upi_id: method === "upi" ? upiId.trim() : "",
-        p_account_name:
-          method === "bank" ? accountName.trim() : "",
-        p_account_number:
-          method === "bank" ? accountNumber.trim() : "",
-        p_ifsc_code:
-          method === "bank" ? ifscCode.trim().toUpperCase() : "",
-      });
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        window.location.href = "/login";
+        return;
+      }
+
+      // First save/update payment details
+      const paymentData = {
+        user_id: user.id,
+        method,
+        account_name: accountName.trim(),
+        upi_id: method === "upi" ? upiId.trim() : null,
+        bank_name:
+          method === "bank"
+            ? bankName.trim() || null
+            : null,
+        account_number:
+          method === "bank"
+            ? accountNumber.trim()
+            : null,
+        ifsc_code:
+          method === "bank"
+            ? ifscCode.trim().toUpperCase()
+            : null,
+        is_default: true,
+      };
+
+      const { error: saveError } = await supabase
+        .from("withdrawal_accounts")
+        .upsert(paymentData, {
+          onConflict: "user_id,method",
+        });
+
+      if (saveError) {
+        console.error(
+          "Payment account save error:",
+          saveError
+        );
+
+        setMessage(
+          "Unable to save payment details. Withdrawal was not submitted."
+        );
+
+        return;
+      }
+
+      // Submit withdrawal
+      const { error } = await supabase.rpc(
+        "request_withdrawal",
+        {
+          p_amount: numericAmount,
+          p_method: method,
+
+          p_upi_id:
+            method === "upi"
+              ? upiId.trim()
+              : "",
+
+          p_account_name:
+            accountName.trim(),
+
+          p_account_number:
+            method === "bank"
+              ? accountNumber.trim()
+              : "",
+
+          p_ifsc_code:
+            method === "bank"
+              ? ifscCode.trim().toUpperCase()
+              : "",
+        }
+      );
 
       if (error) {
+        console.error(
+          "Withdrawal error:",
+          error
+        );
+
         setMessage(error.message);
         return;
       }
@@ -117,16 +380,16 @@ export default function WithdrawPage() {
         "Withdrawal request submitted successfully."
       );
 
+      // Clear amount only.
+      // Keep payment details saved and visible.
       setAmount("");
-      setUpiId("");
-      setAccountName("");
-      setAccountNumber("");
-      setIfscCode("");
 
       await loadWithdrawalData();
     } catch (error) {
       console.error(error);
-      setMessage("Something went wrong. Please try again.");
+      setMessage(
+        "Something went wrong. Please try again."
+      );
     } finally {
       setLoading(false);
     }
@@ -160,10 +423,19 @@ export default function WithdrawPage() {
     };
   }
 
+  const savedCurrentAccount = savedAccounts.find(
+    (account) => account.method === method
+  );
+
+  const isSuccess =
+    message.toLowerCase().includes("successfully") ||
+    message.toLowerCase().includes("saved successfully");
+
   return (
     <main style={styles.page}>
       <div style={styles.container}>
 
+        {/* HEADER */}
         <header style={styles.header}>
           <button
             onClick={() => (window.location.href = "/")}
@@ -173,13 +445,19 @@ export default function WithdrawPage() {
           </button>
 
           <div>
-            <div style={styles.brand}>AURACAMP</div>
-            <div style={styles.subtitle}>Withdrawal</div>
+            <div style={styles.brand}>
+              AURACAMP
+            </div>
+
+            <div style={styles.subtitle}>
+              Withdrawal
+            </div>
           </div>
 
           <div style={{ width: 65 }} />
         </header>
 
+        {/* BALANCE */}
         <section style={styles.balanceCard}>
           <div style={styles.balanceLabel}>
             Available Balance
@@ -194,17 +472,25 @@ export default function WithdrawPage() {
           </div>
         </section>
 
+        {/* WITHDRAW CARD */}
         <section style={styles.card}>
-          <h2 style={styles.title}>Withdraw Money</h2>
+          <h2 style={styles.title}>
+            Withdraw Money
+          </h2>
 
           <p style={styles.description}>
-            Choose your payment method and submit a withdrawal request.
+            Choose your payment method and submit a
+            withdrawal request.
           </p>
 
+          {/* METHOD */}
           <div style={styles.methodGrid}>
+
             <button
               type="button"
-              onClick={() => setMethod("upi")}
+              onClick={() =>
+                handleMethodChange("upi")
+              }
               style={{
                 ...styles.methodButton,
                 ...(method === "upi"
@@ -212,13 +498,18 @@ export default function WithdrawPage() {
                   : {}),
               }}
             >
-              <span style={styles.methodIcon}>📱</span>
+              <span style={styles.methodIcon}>
+                📱
+              </span>
+
               UPI
             </button>
 
             <button
               type="button"
-              onClick={() => setMethod("bank")}
+              onClick={() =>
+                handleMethodChange("bank")
+              }
               style={{
                 ...styles.methodButton,
                 ...(method === "bank"
@@ -226,19 +517,115 @@ export default function WithdrawPage() {
                   : {}),
               }}
             >
-              <span style={styles.methodIcon}>🏦</span>
+              <span style={styles.methodIcon}>
+                🏦
+              </span>
+
               Bank
             </button>
+
           </div>
+
+          {/* SAVED ACCOUNT */}
+          {savedCurrentAccount && !editingAccount && (
+            <div style={styles.savedBox}>
+
+              <div style={styles.savedHeader}>
+                <div>
+                  <div style={styles.savedTitle}>
+                    Saved {method === "upi" ? "UPI" : "Bank"} Account
+                  </div>
+
+                  <div style={styles.savedSubtitle}>
+                    Ready for withdrawal
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEditingAccount(true)
+                  }
+                  style={styles.editButton}
+                >
+                  ✏️ Edit
+                </button>
+              </div>
+
+              <div style={styles.savedDetails}>
+
+                <div style={styles.savedRow}>
+                  <span>
+                    Account Name
+                  </span>
+
+                  <strong>
+                    {savedCurrentAccount.account_name}
+                  </strong>
+                </div>
+
+                {method === "upi" ? (
+                  <div style={styles.savedRow}>
+                    <span>
+                      UPI ID
+                    </span>
+
+                    <strong>
+                      {savedCurrentAccount.upi_id}
+                    </strong>
+                  </div>
+                ) : (
+                  <>
+                    {savedCurrentAccount.bank_name && (
+                      <div style={styles.savedRow}>
+                        <span>
+                          Bank
+                        </span>
+
+                        <strong>
+                          {savedCurrentAccount.bank_name}
+                        </strong>
+                      </div>
+                    )}
+
+                    <div style={styles.savedRow}>
+                      <span>
+                        Account Number
+                      </span>
+
+                      <strong>
+                        {savedCurrentAccount.account_number}
+                      </strong>
+                    </div>
+
+                    <div style={styles.savedRow}>
+                      <span>
+                        IFSC
+                      </span>
+
+                      <strong>
+                        {savedCurrentAccount.ifsc_code}
+                      </strong>
+                    </div>
+                  </>
+                )}
+
+              </div>
+
+            </div>
+          )}
 
           <form onSubmit={submitWithdrawal}>
 
+            {/* AMOUNT */}
             <label style={styles.label}>
               Withdrawal Amount
             </label>
 
             <div style={styles.inputWrap}>
-              <span style={styles.rupee}>₹</span>
+              <span style={styles.rupee}>
+                ₹
+              </span>
 
               <input
                 type="number"
@@ -246,27 +633,17 @@ export default function WithdrawPage() {
                 step="1"
                 placeholder="Enter amount"
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                onChange={(e) =>
+                  setAmount(e.target.value)
+                }
                 style={styles.amountInput}
               />
             </div>
 
-            {method === "upi" ? (
+            {/* EDIT / NEW PAYMENT DETAILS */}
+            {(!savedCurrentAccount || editingAccount) && (
               <>
-                <label style={styles.label}>
-                  UPI ID
-                </label>
-
-                <input
-                  type="text"
-                  placeholder="example@upi"
-                  value={upiId}
-                  onChange={(e) => setUpiId(e.target.value)}
-                  style={styles.input}
-                />
-              </>
-            ) : (
-              <>
+                {/* ACCOUNT NAME */}
                 <label style={styles.label}>
                   Account Holder Name
                 </label>
@@ -281,45 +658,124 @@ export default function WithdrawPage() {
                   style={styles.input}
                 />
 
-                <label style={styles.label}>
-                  Account Number
-                </label>
+                {/* UPI */}
+                {method === "upi" ? (
+                  <>
+                    <label style={styles.label}>
+                      UPI ID
+                    </label>
 
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  placeholder="Enter account number"
-                  value={accountNumber}
-                  onChange={(e) =>
-                    setAccountNumber(e.target.value)
-                  }
-                  style={styles.input}
-                />
+                    <input
+                      type="text"
+                      placeholder="example@upi"
+                      value={upiId}
+                      onChange={(e) =>
+                        setUpiId(e.target.value)
+                      }
+                      style={styles.input}
+                    />
+                  </>
+                ) : (
+                  <>
+                    {/* BANK NAME */}
+                    <label style={styles.label}>
+                      Bank Name
+                    </label>
 
-                <label style={styles.label}>
-                  IFSC Code
-                </label>
+                    <input
+                      type="text"
+                      placeholder="Enter bank name"
+                      value={bankName}
+                      onChange={(e) =>
+                        setBankName(e.target.value)
+                      }
+                      style={styles.input}
+                    />
 
-                <input
-                  type="text"
-                  placeholder="Example: SBIN0001234"
-                  value={ifscCode}
-                  onChange={(e) =>
-                    setIfscCode(e.target.value.toUpperCase())
-                  }
-                  style={styles.input}
-                />
+                    {/* ACCOUNT NUMBER */}
+                    <label style={styles.label}>
+                      Account Number
+                    </label>
+
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="Enter account number"
+                      value={accountNumber}
+                      onChange={(e) =>
+                        setAccountNumber(
+                          e.target.value
+                        )
+                      }
+                      style={styles.input}
+                    />
+
+                    {/* IFSC */}
+                    <label style={styles.label}>
+                      IFSC Code
+                    </label>
+
+                    <input
+                      type="text"
+                      placeholder="Example: SBIN0001234"
+                      value={ifscCode}
+                      onChange={(e) =>
+                        setIfscCode(
+                          e.target.value.toUpperCase()
+                        )
+                      }
+                      style={styles.input}
+                    />
+                  </>
+                )}
+
+                {/* SAVE DETAILS */}
+                <button
+                  type="button"
+                  disabled={savingAccount}
+                  onClick={savePaymentAccount}
+                  style={{
+                    ...styles.saveButton,
+                    opacity: savingAccount ? 0.6 : 1,
+                  }}
+                >
+                  {savingAccount
+                    ? "Saving..."
+                    : editingAccount
+                    ? "Save Changes"
+                    : "Save Payment Details"}
+                </button>
+
+                {/* CANCEL EDIT */}
+                {editingAccount && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (savedCurrentAccount) {
+                        loadAccountIntoForm(
+                          savedCurrentAccount
+                        );
+                      } else {
+                        setEditingAccount(false);
+                      }
+                    }}
+                    style={styles.cancelButton}
+                  >
+                    Cancel
+                  </button>
+                )}
               </>
             )}
 
+            {/* MESSAGE */}
             {message && (
               <div
                 style={{
                   ...styles.message,
-                  color: message.includes("success")
+                  color: isSuccess
                     ? "#166534"
                     : "#b91c1c",
-                  background: message.includes("success")
+                  background: isSuccess
                     ? "#dcfce7"
                     : "#fee2e2",
                 }}
@@ -328,6 +784,7 @@ export default function WithdrawPage() {
               </div>
             )}
 
+                        {/* WITHDRAW BUTTON */}
             <button
               type="submit"
               disabled={loading}
@@ -340,28 +797,47 @@ export default function WithdrawPage() {
                 ? "Submitting..."
                 : "Request Withdrawal"}
             </button>
+
           </form>
         </section>
 
+        {/* WITHDRAWAL HISTORY */}
         <section style={styles.card}>
-          <h2 style={styles.title}>Withdrawal History</h2>
+          <h2 style={styles.title}>
+            Withdrawal History
+          </h2>
 
           {withdrawals.length === 0 ? (
             <div style={styles.empty}>
-              <div style={styles.emptyIcon}>💸</div>
-              <strong>No withdrawals yet</strong>
-              <p>Your withdrawal requests will appear here.</p>
+              <div style={styles.emptyIcon}>
+                💸
+              </div>
+
+              <strong>
+                No withdrawals yet
+              </strong>
+
+              <p>
+                Your withdrawal requests will
+                appear here.
+              </p>
             </div>
           ) : (
             <div>
               {withdrawals.map((item) => (
-                <div key={item.id} style={styles.historyRow}>
+                <div
+                  key={item.id}
+                  style={styles.historyRow}
+                >
                   <div>
                     <strong>
-                      ₹{Number(item.amount).toFixed(2)}
+                      ₹
+                      {Number(item.amount).toFixed(2)}
                     </strong>
 
-                    <div style={styles.historyDate}>
+                    <div
+                      style={styles.historyDate}
+                    >
                       {item.method.toUpperCase()} •{" "}
                       {new Date(
                         item.created_at
@@ -383,6 +859,7 @@ export default function WithdrawPage() {
           )}
         </section>
 
+        {/* FOOTER */}
         <footer style={styles.footer}>
           AURACAMP • Secure Withdrawal
         </footer>
@@ -392,7 +869,10 @@ export default function WithdrawPage() {
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<
+  string,
+  React.CSSProperties
+> = {
   page: {
     minHeight: "100vh",
     background: "#f5f7fb",
@@ -469,7 +949,8 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "20px",
     padding: "22px",
     marginBottom: "16px",
-    boxShadow: "0 5px 20px rgba(0,0,0,0.04)",
+    boxShadow:
+      "0 5px 20px rgba(0,0,0,0.04)",
   },
 
   title: {
@@ -498,6 +979,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "14px",
     fontWeight: "700",
     cursor: "pointer",
+    minHeight: "78px",
   },
 
   methodActive: {
@@ -510,6 +992,60 @@ const styles: Record<string, React.CSSProperties> = {
     display: "block",
     fontSize: "22px",
     marginBottom: "5px",
+  },
+
+  savedBox: {
+    background: "#f0fdf4",
+    border: "1px solid #bbf7d0",
+    borderRadius: "14px",
+    padding: "14px",
+    marginBottom: "18px",
+  },
+
+  savedHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "10px",
+    marginBottom: "12px",
+  },
+
+  savedTitle: {
+    fontSize: "14px",
+    fontWeight: "800",
+    color: "#166534",
+  },
+
+  savedSubtitle: {
+    fontSize: "11px",
+    color: "#4b7a59",
+    marginTop: "3px",
+  },
+
+  editButton: {
+    border: "1px solid #86efac",
+    background: "#fff",
+    color: "#166534",
+    borderRadius: "9px",
+    padding: "8px 10px",
+    fontWeight: "700",
+    cursor: "pointer",
+  },
+
+  savedDetails: {
+    background: "#fff",
+    borderRadius: "10px",
+    padding: "10px 12px",
+  },
+
+  savedRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: "15px",
+    padding: "7px 0",
+    borderBottom: "1px solid #f0fdf4",
+    fontSize: "12px",
   },
 
   label: {
@@ -549,6 +1085,32 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "13px",
     fontSize: "14px",
     outline: "none",
+  },
+
+  saveButton: {
+    width: "100%",
+    marginTop: "15px",
+    background: "#173bff",
+    color: "#fff",
+    border: "none",
+    borderRadius: "11px",
+    padding: "13px",
+    fontWeight: "700",
+    fontSize: "14px",
+    cursor: "pointer",
+  },
+
+  cancelButton: {
+    width: "100%",
+    marginTop: "8px",
+    background: "#f3f4f6",
+    color: "#374151",
+    border: "none",
+    borderRadius: "11px",
+    padding: "12px",
+    fontWeight: "700",
+    fontSize: "14px",
+    cursor: "pointer",
   },
 
   message: {
