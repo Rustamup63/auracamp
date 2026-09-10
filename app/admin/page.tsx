@@ -8,7 +8,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
 );
 
-const empty = {
+const blank = {
   name: "",
   description: "",
   category: "Other",
@@ -23,34 +23,32 @@ const empty = {
 };
 
 export default function AdminPage() {
-  const [ok, setOk] = useState(false);
+  const [admin, setAdmin] = useState(false);
   const [tab, setTab] = useState("overview");
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const [withdrawals, setWithdrawals] = useState<any[]>([]);
-  const [form, setForm] = useState<any>(empty);
-  const [edit, setEdit] = useState<any>(null);
-  const [show, setShow] = useState(false);
+  const [form, setForm] = useState<any>(blank);
+  const [editing, setEditing] = useState<any>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [selected, setSelected] = useState<any>(null);
+  const [userData, setUserData] = useState<any>(null);
   const [action, setAction] = useState("");
   const [note, setNote] = useState("");
-  const [msg, setMsg] = useState("");
+  const [message, setMessage] = useState("");
+  const [loadingUser, setLoadingUser] = useState(false);
 
   useEffect(() => {
     init();
   }, []);
 
   useEffect(() => {
-    if (!ok) return;
+    if (!admin) return;
 
     const channel = supabase
-      .channel("withdrawals")
+      .channel("admin-withdrawals")
       .on(
         "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "withdrawals",
-        },
+        { event: "*", schema: "public", table: "withdrawals" },
         loadWithdrawals
       )
       .subscribe();
@@ -58,7 +56,7 @@ export default function AdminPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [ok]);
+  }, [admin]);
 
   async function init() {
     const {
@@ -72,14 +70,17 @@ export default function AdminPage() {
 
     const { data } = await supabase
       .from("admin_users")
-      .select("*")
+      .select("id")
       .eq("id", user.id)
       .eq("is_active", true)
       .maybeSingle();
 
-    if (!data) return;
+    if (!data) {
+      setMessage("Admin access denied.");
+      return;
+    }
 
-    setOk(true);
+    setAdmin(true);
     loadCampaigns();
     loadWithdrawals();
   }
@@ -103,18 +104,18 @@ export default function AdminPage() {
     setWithdrawals(data || []);
   }
 
-  function set(key: string, value: string) {
+  function change(key: string, value: string) {
     setForm((x: any) => ({ ...x, [key]: value }));
   }
 
-  function createCampaign() {
-    setEdit(null);
-    setForm(empty);
-    setShow(true);
+  function newCampaign() {
+    setEditing(null);
+    setForm(blank);
+    setFormOpen(true);
   }
 
   function editCampaign(c: any) {
-    setEdit(c);
+    setEditing(c);
     setForm({
       name: c.name || "",
       description: c.description || "",
@@ -128,14 +129,14 @@ export default function AdminPage() {
       daily_limit: c.daily_limit == null ? "" : String(c.daily_limit),
       total_limit: c.total_limit == null ? "" : String(c.total_limit),
     });
-    setShow(true);
+    setFormOpen(true);
   }
 
-  async function save(e: any) {
+  async function saveCampaign(e: any) {
     e.preventDefault();
 
     if (!form.name || !form.landing_url) {
-      setMsg("Campaign name and landing URL are required.");
+      setMessage("Name and landing URL are required.");
       return;
     }
 
@@ -153,8 +154,8 @@ export default function AdminPage() {
       total_limit: form.total_limit ? Number(form.total_limit) : null,
     };
 
-    const result = edit
-      ? await supabase.from("campaigns").update(data).eq("id", edit.id)
+    const result = editing
+      ? await supabase.from("campaigns").update(data).eq("id", editing.id)
       : await supabase.from("campaigns").insert({
           ...data,
           slug:
@@ -165,56 +166,109 @@ export default function AdminPage() {
         });
 
     if (result.error) {
-      setMsg(result.error.message);
+      setMessage(result.error.message);
       return;
     }
 
-    setMsg(edit ? "Campaign updated." : "Campaign created.");
-    setShow(false);
-    setEdit(null);
-    setForm(empty);
+    setMessage(editing ? "Campaign updated." : "Campaign created.");
+    setFormOpen(false);
+    setEditing(null);
+    setForm(blank);
     loadCampaigns();
   }
 
-  async function status(id: string, value: string) {
-    await supabase
+  async function campaignStatus(id: string, status: string) {
+    const { error } = await supabase
       .from("campaigns")
-      .update({ status: value })
+      .update({ status })
       .eq("id", id);
 
+    if (error) setMessage(error.message);
     loadCampaigns();
   }
 
-  async function remove(id: string) {
+  async function deleteCampaign(id: string) {
     if (!confirm("Delete this campaign?")) return;
 
-    await supabase.from("campaigns").delete().eq("id", id);
+    const { error } = await supabase
+      .from("campaigns")
+      .delete()
+      .eq("id", id);
+
+    if (error) setMessage(error.message);
+    else setMessage("Campaign deleted.");
+
     loadCampaigns();
+  }
+
+  async function viewUser(userId: string) {
+    setLoadingUser(true);
+    setUserData(null);
+
+    const [p, c, t, w, cl, campaignsData] = await Promise.all([
+      supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
+      supabase
+        .from("conversions")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("wallet_transactions")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("withdrawals")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("clicks")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false }),
+      supabase.from("campaigns").select("id,name"),
+    ]);
+
+    const names: any = {};
+    (campaignsData.data || []).forEach((x: any) => {
+      names[x.id] = x.name;
+    });
+
+    setUserData({
+      profile: p.data,
+      conversions: (c.data || []).map((x: any) => ({
+        ...x,
+        campaign_name: names[x.campaign_id] || x.campaign_id,
+      })),
+      transactions: t.data || [],
+      withdrawals: w.data || [],
+      clicks: cl.data || [],
+    });
+
+    setLoadingUser(false);
   }
 
   async function processWithdrawal() {
-    if (!selected || !action) return;
+    if (!selected) return;
 
     if (action === "reject" && !note.trim()) {
-      setMsg("Rejection reason is required.");
+      setMessage("Rejection reason is required.");
       return;
     }
 
-    const { error } = await supabase.rpc(
-      "admin_process_withdrawal",
-      {
-        p_withdrawal_id: selected.id,
-        p_action: action,
-        p_admin_note: note || null,
-      }
-    );
+    const { error } = await supabase.rpc("admin_process_withdrawal", {
+      p_withdrawal_id: selected.id,
+      p_action: action,
+      p_admin_note: note || null,
+    });
 
     if (error) {
-      setMsg(error.message);
+      setMessage(error.message);
       return;
     }
 
-    setMsg(
+    setMessage(
       action === "approve"
         ? "Withdrawal approved."
         : "Withdrawal rejected."
@@ -226,15 +280,14 @@ export default function AdminPage() {
     loadWithdrawals();
   }
 
-  if (!ok) {
+  if (!admin) {
     return (
       <main style={S.center}>
-        <h2>Checking Admin Access...</h2>
+        <h2>{message || "Checking Admin Access..."}</h2>
       </main>
     );
   }
 
-  const active = campaigns.filter((x) => x.status === "active").length;
   const pending = withdrawals.filter((x) => x.status === "pending");
   const pendingAmount = pending.reduce(
     (a, x) => a + Number(x.amount || 0),
@@ -249,7 +302,14 @@ export default function AdminPage() {
             <b style={S.logo}>AURACAMP</b>
             <small> ADMIN PANEL</small>
           </div>
-          <button onClick={() => supabase.auth.signOut().then(() => location.href = "/login")} style={S.darkBtn}>
+
+          <button
+            style={S.dark}
+            onClick={async () => {
+              await supabase.auth.signOut();
+              location.href = "/login";
+            }}
+          >
             Logout
           </button>
         </header>
@@ -259,10 +319,7 @@ export default function AdminPage() {
             <button
               key={x}
               onClick={() => setTab(x)}
-              style={{
-                ...S.tab,
-                ...(tab === x ? S.tabOn : {}),
-              }}
+              style={{ ...S.tab, ...(tab === x ? S.active : {}) }}
             >
               {x[0].toUpperCase() + x.slice(1)}
               {x === "withdrawals" && pending.length > 0 && (
@@ -272,9 +329,9 @@ export default function AdminPage() {
           ))}
         </nav>
 
-        {msg && (
-          <div style={S.msg} onClick={() => setMsg("")}>
-            {msg}
+        {message && (
+          <div style={S.message} onClick={() => setMessage("")}>
+            {message}
           </div>
         )}
 
@@ -284,15 +341,19 @@ export default function AdminPage() {
               <div>
                 <small>AURACAMP CONTROL CENTER</small>
                 <h1>Platform Operations</h1>
-                <p>Manage campaigns and withdrawals.</p>
+                <p>Manage offers, users and withdrawals.</p>
               </div>
-              <strong style={{ fontSize: 45 }}>⚡</strong>
+              <b style={{ fontSize: 45 }}>⚡</b>
             </section>
 
             <div style={S.grid}>
               <Stat title="Campaigns" value={campaigns.length} icon="📦" />
-              <Stat title="Active" value={active} icon="🟢" />
-              <Stat title="Pending Requests" value={pending.length} icon="💸" />
+              <Stat
+                title="Active"
+                value={campaigns.filter((x) => x.status === "active").length}
+                icon="🟢"
+              />
+              <Stat title="Pending" value={pending.length} icon="💸" />
               <Stat title="Pending Amount" value={`₹${pendingAmount}`} icon="💰" />
             </div>
           </>
@@ -302,16 +363,20 @@ export default function AdminPage() {
           <section style={S.card}>
             <div style={S.row}>
               <div>
-                <h2>Campaigns</h2>
-                <small>Create and manage offers.</small>
+                <h2>Campaign Management</h2>
+                <small>Create and manage AURACAMP offers.</small>
               </div>
-              <button onClick={() => show ? setShow(false) : createCampaign()} style={S.darkBtn}>
-                {show ? "Close" : "+ Create"}
+
+              <button
+                style={S.dark}
+                onClick={() => (formOpen ? setFormOpen(false) : newCampaign())}
+              >
+                {formOpen ? "Close" : "+ Create"}
               </button>
             </div>
 
-            {show && (
-              <form onSubmit={save} style={S.form}>
+            {formOpen && (
+              <form onSubmit={saveCampaign} style={S.form}>
                 <div style={S.formGrid}>
                   {[
                     ["name", "Campaign Name"],
@@ -328,11 +393,10 @@ export default function AdminPage() {
                       {label}
                       <input
                         value={form[key]}
-                        onChange={(e) => set(key, e.target.value)}
-                        placeholder={label}
+                        onChange={(e) => change(key, e.target.value)}
                         type={
-                          key.includes("payout") ||
                           key === "reward" ||
+                          key === "advertiser_payout" ||
                           key.includes("limit")
                             ? "number"
                             : "text"
@@ -346,7 +410,7 @@ export default function AdminPage() {
                   Description
                   <textarea
                     value={form.description}
-                    onChange={(e) => set("description", e.target.value)}
+                    onChange={(e) => change("description", e.target.value)}
                   />
                 </label>
 
@@ -354,19 +418,19 @@ export default function AdminPage() {
                   Terms
                   <textarea
                     value={form.terms}
-                    onChange={(e) => set("terms", e.target.value)}
+                    onChange={(e) => change("terms", e.target.value)}
                   />
                 </label>
 
-                <button style={S.darkBtn}>
-                  {edit ? "Update Campaign" : "Create Campaign"}
+                <button style={S.dark}>
+                  {editing ? "Update Campaign" : "Create Campaign"}
                 </button>
               </form>
             )}
 
             <div style={S.list}>
               {campaigns.map((c) => (
-                <div key={c.id} style={S.item}>
+                <div style={S.item} key={c.id}>
                   <div>
                     <b>{c.name}</b>
                     <small>
@@ -381,7 +445,7 @@ export default function AdminPage() {
 
                     <button
                       onClick={() =>
-                        status(
+                        campaignStatus(
                           c.id,
                           c.status === "active" ? "paused" : "active"
                         )
@@ -390,7 +454,9 @@ export default function AdminPage() {
                       {c.status === "active" ? "Pause" : "Activate"}
                     </button>
 
-                    <button onClick={() => remove(c.id)}>Delete</button>
+                    <button onClick={() => deleteCampaign(c.id)}>
+                      Delete
+                    </button>
                   </div>
                 </div>
               ))}
@@ -402,56 +468,68 @@ export default function AdminPage() {
           <section style={S.card}>
             <div style={S.row}>
               <div>
-                <h2>Withdrawals</h2>
-                <small>Review user withdrawal requests.</small>
+                <h2>Withdrawal Management</h2>
+                <small>Full payment and user information.</small>
               </div>
-              <button onClick={loadWithdrawals} style={S.darkBtn}>
+
+              <button style={S.dark} onClick={loadWithdrawals}>
                 Refresh
               </button>
             </div>
 
             <div style={S.list}>
               {withdrawals.map((w) => (
-                <div key={w.id} style={S.item}>
+                <div style={S.withdrawal} key={w.id}>
                   <div>
-                    <b>₹{Number(w.amount).toFixed(2)}</b>
-                    <small>
-                      {w.method?.toUpperCase()} • {w.account_name || "User"}
-                    </small>
+                    <h2>₹{Number(w.amount).toFixed(2)}</h2>
 
-                    {w.method === "upi" ? (
-                      <small>UPI: {w.upi_id || "-"}</small>
-                    ) : (
-                      <small>
-                        {w.bank_name || "-"} ••••{w.account_number?.slice(-4)}
-                        {" "}• {w.ifsc_code || "-"}
-                      </small>
-                    )}
+                    <b>{w.account_name || "User"}</b>
 
                     <span style={S.badge}>{w.status}</span>
+
+                    <div style={S.details}>
+                      <b>Payment: {String(w.method).toUpperCase()}</b>
+                      <span>Account Holder: {w.account_name || "-"}</span>
+                      <span>Bank: {w.bank_name || "-"}</span>
+                      <span>
+                        Account Number: {w.account_number || "-"}
+                      </span>
+                      <span>IFSC: {w.ifsc_code || "-"}</span>
+                      <span>UPI ID: {w.upi_id || "-"}</span>
+                      <span>
+                        Requested:{" "}
+                        {new Date(w.created_at).toLocaleString("en-IN")}
+                      </span>
+                    </div>
                   </div>
 
-                  {w.status === "pending" && (
-                    <div style={S.actions}>
-                      <button
-                        onClick={() => {
-                          setSelected(w);
-                          setAction("reject");
-                        }}
-                      >
-                        Reject
-                      </button>
+                  <div style={S.actions}>
+                    <button onClick={() => viewUser(w.user_id)}>
+                      View User Details
+                    </button>
 
-                      <button
-                        onClick={() => {
-                          setSelected(w);
-                          setAction("approve");
-                        }}
-                      >
-                        Approve
-                      </button>
-                    </div>
-                  )}
+                    {w.status === "pending" && (
+                      <>
+                        <button
+                          onClick={() => {
+                            setSelected(w);
+                            setAction("reject");
+                          }}
+                        >
+                          Reject
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setSelected(w);
+                            setAction("approve");
+                          }}
+                        >
+                          Approve
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -472,24 +550,150 @@ export default function AdminPage() {
               </p>
 
               <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
                 placeholder={
                   action === "approve"
-                    ? "Optional admin note"
+                    ? "Admin note (optional)"
                     : "Rejection reason"
                 }
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
               />
 
               <div style={S.actions}>
-                <button onClick={() => setSelected(null)}>
-                  Cancel
-                </button>
-
-                <button onClick={processWithdrawal} style={S.darkBtn}>
+                <button onClick={() => setSelected(null)}>Cancel</button>
+                <button style={S.dark} onClick={processWithdrawal}>
                   Confirm
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {userData && (
+          <div style={S.modal}>
+            <div style={S.userModal}>
+              <div style={S.row}>
+                <h2>User Details</h2>
+                <button onClick={() => setUserData(null)}>✕</button>
+              </div>
+
+              {loadingUser ? (
+                <p>Loading user data...</p>
+              ) : (
+                <>
+                  <section style={S.userBox}>
+                    <h3>👤 Profile</h3>
+                    <p>
+                      <b>Name:</b> {userData.profile?.full_name || "-"}
+                    </p>
+                    <p>
+                      <b>Registered Email:</b>{" "}
+                      {userData.profile?.email || "-"}
+                    </p>
+                    <p>
+                      <b>User ID:</b> {userData.profile?.id || "-"}
+                    </p>
+                    <p>
+                      <b>Referral Code:</b>{" "}
+                      {userData.profile?.referral_code || "-"}
+                    </p>
+                  </section>
+
+                  <section style={S.userBox}>
+                    <h3>💰 Wallet</h3>
+                    <p>
+                      Balance: ₹
+                      {Number(userData.profile?.wallet_balance || 0).toFixed(2)}
+                    </p>
+                    <p>
+                      Pending: ₹
+                      {Number(userData.profile?.pending_balance || 0).toFixed(2)}
+                    </p>
+                    <p>
+                      Total Earned: ₹
+                      {Number(userData.profile?.total_earned || 0).toFixed(2)}
+                    </p>
+                    <p>
+                      Total Withdrawn: ₹
+                      {Number(
+                        userData.profile?.total_withdrawn || 0
+                      ).toFixed(2)}
+                    </p>
+                  </section>
+
+                  <section style={S.userBox}>
+                    <h3>🏦 Withdrawal History</h3>
+                    {userData.withdrawals.length === 0 ? (
+                      <small>No withdrawal history.</small>
+                    ) : (
+                      userData.withdrawals.map((x: any) => (
+                        <div style={S.history} key={x.id}>
+                          <b>₹{Number(x.amount).toFixed(2)}</b>
+                          <span>Status: {x.status}</span>
+                          <span>Method: {x.method}</span>
+                          <span>Account Holder: {x.account_name || "-"}</span>
+                          <span>Bank: {x.bank_name || "-"}</span>
+                          <span>
+                            Account Number: {x.account_number || "-"}
+                          </span>
+                          <span>IFSC: {x.ifsc_code || "-"}</span>
+                          <span>UPI: {x.upi_id || "-"}</span>
+                          <span>
+                            {new Date(x.created_at).toLocaleString("en-IN")}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </section>
+
+                  <section style={S.userBox}>
+                    <h3>🎯 Offer / Conversion History</h3>
+                    {userData.conversions.map((x: any) => (
+                      <div style={S.history} key={x.id}>
+                        <b>{x.campaign_name}</b>
+                        <span>Reward: ₹{x.reward}</span>
+                        <span>Payout: ₹{x.advertiser_payout}</span>
+                        <span>Status: {x.status}</span>
+                        <span>Conversion: {x.conversion_id}</span>
+                        {x.rejection_reason && (
+                          <span>Reason: {x.rejection_reason}</span>
+                        )}
+                        <span>
+                          {new Date(x.created_at).toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                    ))}
+                  </section>
+
+                  <section style={S.userBox}>
+                    <h3>💳 Wallet Transactions</h3>
+                    {userData.transactions.map((x: any) => (
+                      <div style={S.history} key={x.id}>
+                        <b>{x.type}</b>
+                        <span>₹{Number(x.amount).toFixed(2)}</span>
+                        <span>{x.description || "-"}</span>
+                        <span>
+                          {new Date(x.created_at).toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                    ))}
+                  </section>
+
+                  <section style={S.userBox}>
+                    <h3>🖱️ Click History</h3>
+                    {userData.clicks.map((x: any) => (
+                      <div style={S.history} key={x.id}>
+                        <b>{x.click_id}</b>
+                        <span>Campaign: {x.campaign_id}</span>
+                        <span>Status: {x.status}</span>
+                        <span>
+                          {new Date(x.created_at).toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                    ))}
+                  </section>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -519,15 +723,12 @@ function Stat({
 const S: any = {
   page: {
     minHeight: "100vh",
-    background: "#f5f7fb",
-    padding: 15,
-    fontFamily: "system-ui,sans-serif",
+    background: "#f4f6fa",
+    padding: 14,
+    fontFamily: "Inter,system-ui,sans-serif",
     color: "#111827",
   },
-  wrap: {
-    maxWidth: 1100,
-    margin: "auto",
-  },
+  wrap: { maxWidth: 1100, margin: "auto" },
   center: {
     minHeight: "100vh",
     display: "grid",
@@ -536,24 +737,22 @@ const S: any = {
   },
   header: {
     background: "#111827",
-    color: "white",
-    padding: 20,
-    borderRadius: 18,
+    color: "#fff",
+    padding: "18px 20px",
+    borderRadius: 17,
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
   },
-  logo: {
-    fontSize: 25,
-    letterSpacing: 1,
-  },
+  logo: { fontSize: 24, letterSpacing: 1 },
   nav: {
     display: "flex",
-    gap: 6,
-    margin: "14px 0",
-    background: "white",
+    gap: 5,
+    margin: "12px 0",
+    background: "#fff",
     padding: 5,
     borderRadius: 12,
+    overflowX: "auto",
   },
   tab: {
     border: 0,
@@ -562,14 +761,12 @@ const S: any = {
     borderRadius: 9,
     cursor: "pointer",
     fontWeight: 700,
+    whiteSpace: "nowrap",
   },
-  tabOn: {
-    background: "#111827",
-    color: "white",
-  },
+  active: { background: "#111827", color: "#fff" },
   hero: {
     background: "#111827",
-    color: "white",
+    color: "#fff",
     padding: 25,
     borderRadius: 18,
     display: "flex",
@@ -578,94 +775,136 @@ const S: any = {
   },
   grid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
+    gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))",
     gap: 12,
     margin: "14px 0",
   },
   stat: {
-    background: "white",
-    padding: 18,
-    borderRadius: 15,
+    background: "#fff",
+    padding: 17,
+    borderRadius: 14,
+    display: "grid",
+    gap: 5,
     border: "1px solid #e5e7eb",
   },
   card: {
-    background: "white",
-    padding: 20,
-    borderRadius: 18,
+    background: "#fff",
+    padding: 19,
+    borderRadius: 17,
   },
   row: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
     gap: 10,
-    marginBottom: 18,
   },
-  form: {
-    background: "#f8fafc",
-    padding: 15,
-    borderRadius: 14,
-    marginBottom: 18,
-  },
-  formGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))",
-    gap: 12,
-  },
-  list: {
-    display: "grid",
-    gap: 10,
-  },
-  item: {
-    border: "1px solid #e5e7eb",
-    padding: 14,
-    borderRadius: 14,
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 12,
-    flexWrap: "wrap",
-  },
-  actions: {
-    display: "flex",
-    gap: 6,
-    flexWrap: "wrap",
-  },
-  darkBtn: {
+  dark: {
     background: "#111827",
-    color: "white",
+    color: "#fff",
     border: 0,
     padding: "10px 14px",
     borderRadius: 9,
     cursor: "pointer",
     fontWeight: 700,
   },
+  message: {
+    background: "#dcfce7",
+    padding: 11,
+    borderRadius: 10,
+    marginBottom: 12,
+    cursor: "pointer",
+  },
+  form: {
+    background: "#f8fafc",
+    padding: 15,
+    borderRadius: 14,
+    margin: "15px 0",
+  },
+  formGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))",
+    gap: 11,
+  },
+  formLabel: { display: "grid", gap: 5 },
+  list: { display: "grid", gap: 10, marginTop: 15 },
+  item: {
+    border: "1px solid #e5e7eb",
+    padding: 14,
+    borderRadius: 14,
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "center",
+    flexWrap: "wrap",
+  },
+  withdrawal: {
+    border: "1px solid #e5e7eb",
+    padding: 16,
+    borderRadius: 15,
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 15,
+    flexWrap: "wrap",
+  },
+  actions: {
+    display: "flex",
+    gap: 6,
+    flexWrap: "wrap",
+    alignItems: "center",
+  },
   badge: {
     display: "inline-block",
-    marginTop: 7,
+    margin: "6px 5px",
     padding: "3px 8px",
     borderRadius: 20,
     background: "#eef2ff",
     fontSize: 11,
     fontWeight: 700,
   },
-  msg: {
-    background: "#dcfce7",
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 12,
+  details: {
+    display: "grid",
+    gap: 4,
+    marginTop: 10,
+    fontSize: 13,
+    color: "#4b5563",
   },
   modal: {
     position: "fixed",
     inset: 0,
-    background: "rgba(0,0,0,.5)",
+    background: "rgba(0,0,0,.55)",
     display: "grid",
     placeItems: "center",
-    padding: 15,
+    padding: 12,
+    zIndex: 100,
   },
   modalBox: {
-    background: "white",
-    width: "min(450px,100%)",
+    background: "#fff",
+    width: "min(430px,100%)",
     padding: 20,
+    borderRadius: 17,
+  },
+  userModal: {
+    background: "#f8fafc",
+    width: "min(700px,100%)",
+    maxHeight: "92vh",
+    overflowY: "auto",
+    padding: 18,
     borderRadius: 18,
+  },
+  userBox: {
+    background: "#fff",
+    padding: 14,
+    borderRadius: 13,
+    marginTop: 10,
+    border: "1px solid #e5e7eb",
+  },
+  history: {
+    background: "#f8fafc",
+    padding: 11,
+    borderRadius: 10,
+    marginTop: 7,
+    display: "grid",
+    gap: 3,
+    fontSize: 12,
   },
 };
