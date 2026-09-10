@@ -59,7 +59,7 @@ export default function Home() {
         window.location.href = "/login";
         return;
       }
-
+      alert(`Logged-in User ID: ${user.id}`);
       const { data: admin } = await supabase
         .from("admin_users")
         .select("id, role, is_active")
