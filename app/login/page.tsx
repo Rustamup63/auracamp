@@ -8,1681 +8,2588 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
   {
     auth: {
-      flowType: "pkce",
       persistSession: true,
       autoRefreshToken: true,
-      detectSessionInUrl: true,
     },
   }
 );
 
-type Mode = "login" | "register" | "forgot" | "reset";
+type Profile = {
+  id: string;
+  user_code: string | null;
+  full_name: string | null;
+  email: string | null;
+  wallet_balance: number;
+  pending_balance: number;
+  total_earned: number;
+  total_withdrawn: number;
+};
 
-export default function LoginPage() {
-  const [mode, setMode] = useState<Mode>("login");
+type Campaign = {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  reward: number;
+  conversion_type: string | null;
+  terms: string | null;
+  image_url: string | null;
+  landing_url: string | null;
+};
 
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
+type Transaction = {
+  id: string;
+  type: string;
+  amount: number;
+  description: string | null;
+  created_at: string;
+};
 
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] =
-    useState(false);
+type Withdrawal = {
+  id: string;
+  amount: number;
+  method: string;
+  status: string;
+  created_at: string;
+};
 
-  const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
+export default function Home() {
+  const [loading, setLoading] = useState(true);
 
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState(false);
+  const [profile, setProfile] =
+    useState<Profile | null>(null);
+
+  const [campaigns, setCampaigns] =
+    useState<Campaign[]>([]);
+
+  const [transactions, setTransactions] =
+    useState<Transaction[]>([]);
+
+  const [withdrawals, setWithdrawals] =
+    useState<Withdrawal[]>([]);
+
+  const [userName, setUserName] =
+    useState("User");
+
+  const [message, setMessage] =
+    useState("");
+
+  const [messageType, setMessageType] =
+    useState<"success" | "error">("success");
+
+  const [startingOffer, setStartingOffer] =
+    useState<string | null>(null);
+
+  const [activeNav, setActiveNav] =
+    useState("home");
 
   useEffect(() => {
-    initializeAuth();
+    let mounted = true;
+
+    async function start() {
+      await loadDashboard(mounted);
+    }
+
+    start();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  async function initializeAuth() {
+  /*
+   * REAL-TIME WITHDRAWAL STATUS
+   */
+  useEffect(() => {
+    const channel = supabase
+      .channel("user-withdrawal-status")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "withdrawals",
+        },
+        async () => {
+          await loadWithdrawals();
+          await loadProfile();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  async function loadDashboard(
+    mounted = true
+  ) {
     try {
-      const params = new URLSearchParams(
-        window.location.search
-      );
-
-      const recovery =
-        params.get("mode") === "reset" ||
-        window.location.hash.includes("type=recovery");
-
-      if (recovery) {
-        setMode("reset");
-        return;
-      }
-
       const {
-        data: { session },
-      } = await supabase.auth.getSession();
+        data: { user },
+      } = await supabase.auth.getUser();
 
-      if (session) {
-        window.location.replace("/");
+      if (!user) {
+        window.location.replace("/login");
+        return;
       }
-    } catch {
-      // Keep login page silent if session check fails.
+
+      /*
+       * ADMIN → ADMIN PANEL
+       */
+      const { data: admin } =
+        await supabase
+          .from("admin_users")
+          .select("id")
+          .eq("id", user.id)
+          .eq("is_active", true)
+          .maybeSingle();
+
+      if (admin) {
+        window.location.replace("/admin");
+        return;
+      }
+
+      /*
+       * PROFILE
+       *
+       * IMPORTANT:
+       * user_code is the public ID such as AC1200.
+       *
+       * Supabase UUID is NOT displayed.
+       */
+      const { data: profileData } =
+        await supabase
+          .from("profiles")
+          .select(
+            "id, user_code, full_name, email, wallet_balance, pending_balance, total_earned, total_withdrawn"
+          )
+          .eq("id", user.id)
+          .maybeSingle();
+
+      if (profileData && mounted) {
+        setProfile(profileData);
+
+        setUserName(
+          profileData.full_name ||
+            user.email?.split("@")[0] ||
+            "User"
+        );
+      }
+
+      /*
+       * ACTIVE CAMPAIGNS
+       */
+      const { data: campaignData } =
+        await supabase
+          .from("campaigns")
+          .select(
+            "id, name, description, category, reward, conversion_type, terms, image_url, landing_url"
+          )
+          .eq("status", "active")
+          .order("created_at", {
+            ascending: false,
+          });
+
+      if (mounted) {
+        setCampaigns(campaignData || []);
+      }
+
+      /*
+       * RECENT WALLET ACTIVITY
+       */
+      const { data: transactionData } =
+        await supabase
+          .from("wallet_transactions")
+          .select(
+            "id, type, amount, description, created_at"
+          )
+          .eq("user_id", user.id)
+          .order("created_at", {
+            ascending: false,
+          })
+          .limit(5);
+
+      if (mounted) {
+        setTransactions(
+          transactionData || []
+        );
+      }
+
+      /*
+       * WITHDRAWALS
+       */
+      await loadWithdrawals(user.id);
+    } catch (error) {
+      console.error(
+        "Dashboard error:",
+        error
+      );
+    } finally {
+      if (mounted) {
+        setLoading(false);
+      }
     }
   }
 
-  function clearMessage() {
+  async function loadProfile() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) return;
+
+    const { data } = await supabase
+      .from("profiles")
+      .select(
+        "id, user_code, full_name, email, wallet_balance, pending_balance, total_earned, total_withdrawn"
+      )
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (data) {
+      setProfile(data);
+
+      setUserName(
+        data.full_name ||
+          user.email?.split("@")[0] ||
+          "User"
+      );
+    }
+  }
+
+  async function loadWithdrawals(
+    userId?: string
+  ) {
+    let uid = userId;
+
+    if (!uid) {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) return;
+
+      uid = user.id;
+    }
+
+    const { data } = await supabase
+      .from("withdrawals")
+      .select(
+        "id, amount, method, status, created_at"
+      )
+      .eq("user_id", uid)
+      .order("created_at", {
+        ascending: false,
+      })
+      .limit(5);
+
+    setWithdrawals(data || []);
+  }
+
+  /*
+   * NO BROWSER ALERT
+   *
+   * All messages appear inside the UI.
+   */
+  function showMessage(
+    text: string,
+    type: "success" | "error"
+  ) {
+    setMessage(text);
+    setMessageType(type);
+
+    window.setTimeout(() => {
+      setMessage("");
+    }, 4000);
+  }
+
+  async function startOffer(
+    campaign: Campaign
+  ) {
+    setStartingOffer(campaign.id);
     setMessage("");
-    setError(false);
-  }
 
-  function switchMode(nextMode: Mode) {
-    setMode(nextMode);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-    setName("");
-    setEmail("");
-    setPassword("");
-    setConfirmPassword("");
-
-    setShowPassword(false);
-    setShowConfirmPassword(false);
-
-    clearMessage();
-
-    if (nextMode !== "reset") {
-      window.history.replaceState(
-        {},
-        "",
-        "/login"
-      );
-    }
-  }
-
-  function friendlyError(message: string) {
-    const text = message.toLowerCase();
-
-    if (
-      text.includes("invalid login credentials") ||
-      text.includes("invalid credentials")
-    ) {
-      return "Incorrect email or password.";
-    }
-
-    if (text.includes("email not confirmed")) {
-      return "Please verify your email before logging in.";
-    }
-
-    if (text.includes("user already registered")) {
-      return "An account with this email already exists. Please login.";
-    }
-
-    if (text.includes("password should be at least")) {
-      return "Password must contain at least 6 characters.";
-    }
-
-    if (
-      text.includes("rate limit") ||
-      text.includes("too many requests")
-    ) {
-      return "Too many attempts. Please wait a moment and try again.";
-    }
-
-    if (text.includes("network")) {
-      return "Network error. Please check your internet connection.";
-    }
-
-    return message || "Something went wrong. Please try again.";
-  }
-
-  async function submit(
-    e: React.FormEvent<HTMLFormElement>
-  ) {
-    e.preventDefault();
-
-    clearMessage();
-
-    const cleanEmail = email.trim().toLowerCase();
-
-    if (!cleanEmail) {
-      setMessage("Please enter your email address.");
-      setError(true);
-      return;
-    }
-
-    if (!cleanEmail.includes("@")) {
-      setMessage("Please enter a valid email address.");
-      setError(true);
-      return;
-    }
-
-    if (!password) {
-      setMessage("Please enter your password.");
-      setError(true);
-      return;
-    }
-
-    if (password.length < 6) {
-      setMessage(
-        "Password must contain at least 6 characters."
-      );
-      setError(true);
-      return;
-    }
-
-    if (mode === "register") {
-      if (!name.trim()) {
-        setMessage("Please enter your full name.");
-        setError(true);
+      if (!user) {
+        window.location.replace("/login");
         return;
       }
 
-      if (password !== confirmPassword) {
-        setMessage("Passwords do not match.");
-        setError(true);
+      if (!campaign.landing_url) {
+        showMessage(
+          "This offer is temporarily unavailable.",
+          "error"
+        );
         return;
       }
-    }
 
-    setLoading(true);
+      /*
+       * OWN CLICK TRACKING
+       */
+      const clickId = crypto.randomUUID();
 
-    try {
-      if (mode === "register") {
-        const { data, error: signUpError } =
-          await supabase.auth.signUp({
-            email: cleanEmail,
-            password,
-            options: {
-              data: {
-                full_name: name.trim(),
-              },
-              emailRedirectTo:
-                `${window.location.origin}/auth/callback`,
-            },
+      const { error } =
+        await supabase
+          .from("clicks")
+          .insert({
+            user_id: user.id,
+            campaign_id: campaign.id,
+            click_id: clickId,
+            status: "clicked",
+            user_agent:
+              navigator.userAgent,
           });
 
-        if (signUpError) {
-          throw signUpError;
-        }
-
-        /*
-         * Email confirmation ON:
-         * data.session === null
-         *
-         * Do NOT redirect.
-         * User must verify email first.
-         */
-        if (data.session) {
-          window.location.replace("/");
-          return;
-        }
-
-        setMessage(
-          "Account created. Please check your email and verify your account before logging in."
+      if (error) {
+        console.error(
+          "Click tracking error:",
+          error
         );
 
-        setError(false);
-        setPassword("");
-        setConfirmPassword("");
-      } else {
-        const { error: loginError } =
-          await supabase.auth.signInWithPassword({
-            email: cleanEmail,
-            password,
-          });
-
-        if (loginError) {
-          throw loginError;
-        }
-
-        setMessage(
-          "Login successful. Redirecting..."
+        showMessage(
+          "Unable to start this offer right now. Please try again.",
+          "error"
         );
-        setError(false);
 
-        setTimeout(() => {
-          window.location.replace("/");
-        }, 400);
+        return;
       }
-    } catch (err: unknown) {
-      setError(true);
 
-      setMessage(
-        friendlyError(
-          err instanceof Error
-            ? err.message
-            : "Something went wrong."
-        )
+      const separator =
+        campaign.landing_url.includes("?")
+          ? "&"
+          : "?";
+
+      const trackingUrl =
+        `${campaign.landing_url}` +
+        `${separator}click_id=${encodeURIComponent(
+          clickId
+        )}`;
+
+      /*
+       * NO ALERT
+       * Directly open tracking URL.
+       */
+      window.location.href =
+        trackingUrl;
+    } catch (error) {
+      console.error(
+        "Start offer error:",
+        error
+      );
+
+      showMessage(
+        "Something went wrong. Please try again.",
+        "error"
       );
     } finally {
-      setLoading(false);
+      setStartingOffer(null);
     }
   }
 
-  async function googleLogin() {
-    clearMessage();
-    setGoogleLoading(true);
+  async function logout() {
+    await supabase.auth.signOut();
 
-    try {
-      const { error: googleError } =
-        await supabase.auth.signInWithOAuth({
-          provider: "google",
-          options: {
-            redirectTo:
-              `${window.location.origin}/auth/callback`,
-          },
-        });
-
-      if (googleError) {
-        throw googleError;
-      }
-    } catch (err: unknown) {
-      setError(true);
-
-      setMessage(
-        friendlyError(
-          err instanceof Error
-            ? err.message
-            : "Unable to continue with Google."
-        )
-      );
-
-      setGoogleLoading(false);
-    }
+    window.location.replace("/login");
   }
 
-  async function sendResetEmail(
-    e: React.FormEvent<HTMLFormElement>
+  function withdrawalStatus(
+    status: string
   ) {
-    e.preventDefault();
+    const value =
+      status.toLowerCase();
 
-    clearMessage();
-
-    const cleanEmail = email.trim().toLowerCase();
-
-    if (!cleanEmail) {
-      setMessage("Please enter your email address.");
-      setError(true);
-      return;
+    if (
+      value === "paid" ||
+      value === "approved" ||
+      value === "success" ||
+      value === "completed"
+    ) {
+      return {
+        label: "Paid",
+        className: "status-paid",
+      };
     }
 
-    if (!cleanEmail.includes("@")) {
-      setMessage("Please enter a valid email address.");
-      setError(true);
-      return;
+    if (
+      value === "rejected" ||
+      value === "failed"
+    ) {
+      return {
+        label: "Rejected",
+        className: "status-rejected",
+      };
     }
 
-    setLoading(true);
-
-    try {
-      const { error: resetError } =
-        await supabase.auth.resetPasswordForEmail(
-          cleanEmail,
-          {
-            redirectTo:
-              `${window.location.origin}/login?mode=reset`,
-          }
-        );
-
-      if (resetError) {
-        throw resetError;
-      }
-
-      setMessage(
-        "Password reset link sent. Please check your email."
-      );
-
-      setError(false);
-    } catch (err: unknown) {
-      setError(true);
-
-      setMessage(
-        friendlyError(
-          err instanceof Error
-            ? err.message
-            : "Unable to send reset link."
-        )
-      );
-    } finally {
-      setLoading(false);
-    }
+    return {
+      label:
+        value === "processing"
+          ? "Processing"
+          : "Pending",
+      className: "status-pending",
+    };
   }
 
-  async function updatePassword(
-    e: React.FormEvent<HTMLFormElement>
+  function transactionTitle(
+    transaction: Transaction
   ) {
-    e.preventDefault();
-
-    clearMessage();
-
-    if (!password) {
-      setMessage("Please enter your new password.");
-      setError(true);
-      return;
+    if (transaction.description) {
+      return transaction.description;
     }
 
-    if (password.length < 6) {
-      setMessage(
-        "New password must contain at least 6 characters."
+    return transaction.type
+      .replaceAll("_", " ")
+      .replace(
+        /\b\w/g,
+        (x) => x.toUpperCase()
       );
-      setError(true);
-      return;
-    }
-
-    if (password !== confirmPassword) {
-      setMessage("Passwords do not match.");
-      setError(true);
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      const { error: updateError } =
-        await supabase.auth.updateUser({
-          password,
-        });
-
-      if (updateError) {
-        throw updateError;
-      }
-
-      setMessage(
-        "Password updated successfully. Redirecting..."
-      );
-
-      setError(false);
-
-      setTimeout(() => {
-        window.location.replace("/");
-      }, 900);
-    } catch (err: unknown) {
-      setError(true);
-
-      setMessage(
-        friendlyError(
-          err instanceof Error
-            ? err.message
-            : "Unable to update password."
-        )
-      );
-    } finally {
-      setLoading(false);
-    }
   }
 
-  const busy = loading || googleLoading;
+  if (loading) {
+    return (
+      <>
+        <style>{styles}</style>
+
+        <main className="loading-page">
+          <div className="loading-card">
+            <div className="logo-mark">
+              A
+            </div>
+
+            <div className="loading-brand">
+              AURACAMP
+            </div>
+
+            <div className="loading-line" />
+
+            <p>
+              Preparing your dashboard...
+            </p>
+          </div>
+        </main>
+      </>
+    );
+  }
+
+  const wallet = Number(
+    profile?.wallet_balance || 0
+  );
+
+  const pendingBalance = Number(
+    profile?.pending_balance || 0
+  );
+
+  const totalEarned = Number(
+    profile?.total_earned || 0
+  );
+
+  const latestWithdrawal =
+    withdrawals[0];
 
   return (
     <>
-      <style jsx global>{`
-        * {
-          box-sizing: border-box;
-        }
-
-        html,
-        body {
-          margin: 0;
-          padding: 0;
-          min-height: 100%;
-          background: #f4f8ff;
-          font-family:
-            Inter,
-            ui-sans-serif,
-            system-ui,
-            -apple-system,
-            BlinkMacSystemFont,
-            "Segoe UI",
-            sans-serif;
-        }
-
-        body {
-          overflow-x: hidden;
-        }
-
-        button,
-        input {
-          font: inherit;
-        }
-
-        button {
-          -webkit-tap-highlight-color: transparent;
-        }
-
-        input::placeholder {
-          color: #9aa8ba;
-        }
-
-        .auth-page {
-          min-height: 100svh;
-          width: 100%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 24px;
-          background:
-            radial-gradient(
-              circle at 8% 8%,
-              rgba(37, 99, 235, 0.09),
-              transparent 28%
-            ),
-            radial-gradient(
-              circle at 92% 92%,
-              rgba(79, 70, 229, 0.08),
-              transparent 30%
-            ),
-            #f4f8ff;
-        }
-
-        .auth-shell {
-          width: min(1050px, 100%);
-          min-height: 650px;
-          display: grid;
-          grid-template-columns: 1fr 430px;
-          overflow: hidden;
-          border: 1px solid #e1e8f2;
-          border-radius: 28px;
-          background: #ffffff;
-          box-shadow:
-            0 30px 80px rgba(15, 23, 42, 0.10),
-            0 10px 30px rgba(37, 99, 235, 0.06);
-        }
-
-        /* LEFT */
-
-        .brand-panel {
-          position: relative;
-          overflow: hidden;
-          display: flex;
-          flex-direction: column;
-          justify-content: space-between;
-          padding: 52px;
-          background:
-            linear-gradient(
-              145deg,
-              #edf5ff 0%,
-              #f3f6ff 55%,
-              #fafbff 100%
-            );
-        }
-
-        .brand-panel::before {
-          content: "";
-          position: absolute;
-          width: 390px;
-          height: 390px;
-          border-radius: 50%;
-          top: -210px;
-          right: -160px;
-          background: rgba(37, 99, 235, 0.07);
-        }
-
-        .brand-panel::after {
-          content: "";
-          position: absolute;
-          width: 300px;
-          height: 300px;
-          border-radius: 50%;
-          bottom: -190px;
-          left: -140px;
-          background: rgba(79, 70, 229, 0.06);
-        }
-
-        .brand-content,
-        .brand-bottom {
-          position: relative;
-          z-index: 2;
-        }
-
-        .brand-logo {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-        }
-
-        .logo-mark {
-          width: 48px;
-          height: 48px;
-          display: grid;
-          place-items: center;
-          border-radius: 15px;
-          color: #ffffff;
-          font-size: 24px;
-          font-weight: 900;
-          background:
-            linear-gradient(
-              145deg,
-              #1769ff,
-              #4058ed 55%,
-              #703de7
-            );
-          box-shadow:
-            0 12px 25px rgba(37, 99, 235, 0.22),
-            inset 0 1px 1px
-              rgba(255, 255, 255, 0.55);
-        }
-
-        .brand-name {
-          color: #101828;
-          font-size: 22px;
-          font-weight: 900;
-          letter-spacing: -0.8px;
-        }
-
-        .brand-tagline {
-          margin-top: 2px;
-          color: #748196;
-          font-size: 10px;
-          letter-spacing: 0.3px;
-        }
-
-        .brand-title {
-          max-width: 500px;
-          margin: 78px 0 16px;
-          color: #111827;
-          font-size: clamp(40px, 4.2vw, 60px);
-          line-height: 1.02;
-          font-weight: 900;
-          letter-spacing: -3px;
-        }
-
-        .brand-title span {
-          color: #2864e9;
-        }
-
-        .brand-description {
-          max-width: 450px;
-          margin: 0;
-          color: #66758a;
-          font-size: 15px;
-          line-height: 1.7;
-        }
-
-        .benefits {
-          display: grid;
-          gap: 12px;
-          margin-top: 34px;
-        }
-
-        .benefit {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          color: #344054;
-          font-size: 13px;
-          font-weight: 700;
-        }
-
-        .benefit-icon {
-          width: 33px;
-          height: 33px;
-          display: grid;
-          place-items: center;
-          border: 1px solid #e0e7f0;
-          border-radius: 10px;
-          background: #ffffff;
-          color: #2563eb;
-          box-shadow:
-            0 6px 16px rgba(15, 23, 42, 0.05);
-        }
-
-        .brand-bottom {
-          color: #98a2b3;
-          font-size: 10px;
-          line-height: 1.5;
-        }
-
-        /* RIGHT */
-
-        .auth-panel {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 38px 34px;
-          background: #ffffff;
-        }
-
-        .auth-card {
-          width: 100%;
-          max-width: 360px;
-        }
-
-        .mobile-brand {
-          display: none;
-        }
-
-        .auth-icon {
-          width: 56px;
-          height: 56px;
-          display: grid;
-          place-items: center;
-          margin: 0 auto 16px;
-          border: 1px solid #dbe6ff;
-          border-radius: 17px;
-          color: #ffffff;
-          font-size: 25px;
-          font-weight: 900;
-          background:
-            linear-gradient(
-              145deg,
-              #1769ff,
-              #4058ed 55%,
-              #703de7
-            );
-          box-shadow:
-            0 12px 26px rgba(37, 99, 235, 0.20),
-            inset 0 1px 1px
-              rgba(255, 255, 255, 0.55);
-        }
-
-        .auth-title {
-          margin: 0;
-          color: #101828;
-          text-align: center;
-          font-size: 27px;
-          line-height: 1.15;
-          font-weight: 900;
-          letter-spacing: -0.9px;
-        }
-
-        .auth-subtitle {
-          margin: 8px auto 24px;
-          color: #667085;
-          text-align: center;
-          font-size: 12px;
-          line-height: 1.55;
-        }
-
-        /* MESSAGE */
-
-        .message {
-          width: 100%;
-          margin-bottom: 15px;
-          padding: 11px 12px;
-          border-radius: 12px;
-          font-size: 11px;
-          line-height: 1.5;
-        }
-
-        .message.error {
-          color: #b42318;
-          border: 1px solid #fecdca;
-          background: #fff5f4;
-        }
-
-        .message.success {
-          color: #087443;
-          border: 1px solid #abefc6;
-          background: #f0fdf4;
-        }
-
-        /* FIELDS */
-
-        .field {
-          margin-bottom: 14px;
-        }
-
-        .field-label {
-          display: block;
-          margin-bottom: 7px;
-          color: #344054;
-          font-size: 11px;
-          font-weight: 800;
-        }
-
-        .input-wrap {
-          width: 100%;
-          min-height: 51px;
-          display: flex;
-          align-items: center;
-          border: 1px solid #dce3ed;
-          border-radius: 13px;
-          background: #fafbfc;
-          transition:
-            border-color 0.18s ease,
-            box-shadow 0.18s ease,
-            background 0.18s ease;
-        }
-
-        .input-wrap:focus-within {
-          border-color: #7898ed;
-          background: #ffffff;
-          box-shadow:
-            0 0 0 4px
-              rgba(37, 99, 235, 0.07);
-        }
-
-        .input-icon {
-          width: 42px;
-          flex: 0 0 42px;
-          display: grid;
-          place-items: center;
-          color: #64748b;
-          font-size: 14px;
-        }
-
-        .input {
-          width: 100%;
-          min-width: 0;
-          border: 0;
-          outline: 0;
-          background: transparent;
-          color: #101828;
-          font-size: 13px;
-          padding: 14px 5px 14px 0;
-        }
-
-        .password-toggle {
-          width: 42px;
-          height: 42px;
-          flex: 0 0 42px;
-          border: 0;
-          background: transparent;
-          color: #667085;
-          cursor: pointer;
-          font-size: 16px;
-        }
-
-        .forgot-row {
-          display: flex;
-          justify-content: flex-end;
-          margin: -2px 0 15px;
-        }
-
-        .link-button {
-          padding: 2px;
-          border: 0;
-          background: transparent;
-          color: #2458d7;
-          font-size: 11px;
-          font-weight: 800;
-          cursor: pointer;
-        }
-
-        /* PRIMARY */
-
-        .primary-button {
-          width: 100%;
-          min-height: 51px;
-          border: 0;
-          border-radius: 13px;
-          color: #ffffff;
-          background:
-            linear-gradient(
-              100deg,
-              #172033,
-              #202b40
-            );
-          box-shadow:
-            0 11px 24px
-              rgba(15, 23, 42, 0.15),
-            inset 0 1px 0
-              rgba(255, 255, 255, 0.08);
-          font-size: 13px;
-          font-weight: 800;
-          cursor: pointer;
-          transition:
-            transform 0.15s ease,
-            box-shadow 0.15s ease,
-            opacity 0.15s ease;
-        }
-
-        .primary-button:hover:not(:disabled) {
-          transform: translateY(-1px);
-          box-shadow:
-            0 15px 28px
-              rgba(15, 23, 42, 0.18);
-        }
-
-        .primary-button:active:not(:disabled) {
-          transform: translateY(0);
-        }
-
-        .primary-button:disabled {
-          opacity: 0.62;
-          cursor: not-allowed;
-        }
-
-        /* DIVIDER */
-
-        .divider {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          margin: 20px 0 14px;
-        }
-
-        .divider-line {
-          flex: 1;
-          height: 1px;
-          background: #e8edf3;
-        }
-
-        .divider-text {
-          color: #9aa5b5;
-          font-size: 9px;
-          font-weight: 800;
-        }
-
-        /* GOOGLE */
-
-        .google-button {
-          width: 100%;
-          min-height: 50px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 10px;
-          border: 1px solid #dce3ed;
-          border-radius: 13px;
-          background: #ffffff;
-          color: #1d2939;
-          font-size: 12px;
-          font-weight: 800;
-          cursor: pointer;
-          transition:
-            transform 0.15s ease,
-            border-color 0.15s ease,
-            box-shadow 0.15s ease;
-        }
-
-        .google-button:hover:not(:disabled) {
-          transform: translateY(-1px);
-          border-color: #cbd5e1;
-          box-shadow:
-            0 8px 20px
-              rgba(15, 23, 42, 0.06);
-        }
-
-        .google-button:disabled {
-          opacity: 0.62;
-          cursor: not-allowed;
-        }
-
-        .google-icon {
-          width: 22px;
-          height: 22px;
-          display: grid;
-          place-items: center;
-          font-family: Arial, sans-serif;
-          font-size: 18px;
-          font-weight: 900;
-          color: #4285f4;
-        }
-
-        /* SWITCH */
-
-        .switch-text {
-          margin-top: 19px;
-          color: #667085;
-          text-align: center;
-          font-size: 11px;
-        }
-
-        .switch-text button {
-          margin-left: 5px;
-          padding: 0;
-          border: 0;
-          background: transparent;
-          color: #2458d7;
-          font-size: 11px;
-          font-weight: 800;
-          cursor: pointer;
-        }
-
-        /* LEGAL */
-
-        .legal {
-          margin-top: 19px;
-          color: #98a2b3;
-          text-align: center;
-          font-size: 9px;
-          line-height: 1.6;
-        }
-
-        .legal a {
-          color: #5369c9;
-          text-decoration: none;
-          font-weight: 700;
-        }
-
-        /* SECURITY */
-
-        .security {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-          margin-top: 15px;
-          padding-top: 14px;
-          border-top: 1px solid #eef1f5;
-          color: #98a2b3;
-          font-size: 9px;
-        }
-
-        /* BACK */
-
-        .back-button {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          margin-bottom: 18px;
-          padding: 0;
-          border: 0;
-          background: transparent;
-          color: #667085;
-          font-size: 11px;
-          font-weight: 700;
-          cursor: pointer;
-        }
-
-        /* MOBILE */
-
-        @media (max-width: 820px) {
-          .auth-page {
-            padding: 14px;
-            align-items: flex-start;
-          }
-
-          .auth-shell {
-            display: block;
-            width: 100%;
-            max-width: 500px;
-            min-height: calc(100svh - 28px);
-            border-radius: 24px;
-          }
-
-          .brand-panel {
-            display: none;
-          }
-
-          .auth-panel {
-            min-height: calc(100svh - 28px);
-            padding: 26px 19px 24px;
-          }
-
-          .mobile-brand {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 9px;
-            margin-bottom: 28px;
-          }
-
-          .mobile-brand .logo-mark {
-            width: 40px;
-            height: 40px;
-            border-radius: 12px;
-            font-size: 20px;
-          }
-
-          .mobile-brand-name {
-            color: #101828;
-            font-size: 19px;
-            font-weight: 900;
-            letter-spacing: -0.5px;
-          }
-
-          .auth-card {
-            max-width: 390px;
-          }
-        }
-
-        @media (max-width: 420px) {
-          .auth-page {
-            padding: 0;
-          }
-
-          .auth-shell {
-            min-height: 100svh;
-            border: 0;
-            border-radius: 0;
-            box-shadow: none;
-          }
-
-          .auth-panel {
-            min-height: 100svh;
-            padding: 22px 16px;
-          }
-
-          .auth-title {
-            font-size: 25px;
-          }
-        }
-      `}</style>
-
-      <main className="auth-page">
-        <div className="auth-shell">
+      <style>{styles}</style>
+
+      <main className="app">
+
+        {/* =========================
+            DESKTOP / MOBILE HEADER
+        ========================== */}
+
+        <header className="topbar">
+          <div className="topbar-inner">
+
+            <a
+              href="/"
+              className="brand"
+              onClick={() =>
+                setActiveNav("home")
+              }
+            >
+              <span className="brand-logo">
+                A
+              </span>
+
+              <span>
+                <strong>AURACAMP</strong>
+                <small>
+                  Earn • Explore • Grow
+                </small>
+              </span>
+            </a>
+
+            <div className="top-actions">
+
+              <button
+                className="notification"
+                type="button"
+                aria-label="Notifications"
+                onClick={() =>
+                  showMessage(
+                    "Notifications will appear here.",
+                    "success"
+                  )
+                }
+              >
+                <span />
+                <svg
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"
+                  />
+                </svg>
+              </button>
+
+              <button
+                className="logout"
+                type="button"
+                onClick={logout}
+              >
+                Logout
+              </button>
+
+            </div>
+          </div>
+        </header>
+
+        <div className="container">
 
           {/* =========================
-              DESKTOP BRAND
+              MESSAGE
           ========================== */}
 
-          <section className="brand-panel">
-            <div className="brand-content">
+          {message && (
+            <div
+              className={
+                messageType === "success"
+                  ? "message success"
+                  : "message error"
+              }
+            >
+              <span>
+                {messageType ===
+                "success"
+                  ? "✓"
+                  : "!"}
+              </span>
 
-              <div className="brand-logo">
-                <div className="logo-mark">
-                  A
-                </div>
+              {message}
+            </div>
+          )}
 
-                <div>
-                  <div className="brand-name">
-                    AURACAMP
-                  </div>
+          {/* =========================
+              WELCOME
+          ========================== */}
 
-                  <div className="brand-tagline">
-                    Earn More. Do More.
-                  </div>
+          <section className="welcome">
+
+            <div className="welcome-left">
+
+              <div className="avatar">
+                {userName
+                  .charAt(0)
+                  .toUpperCase()}
+              </div>
+
+              <div>
+                <p className="eyebrow">
+                  WELCOME BACK
+                </p>
+
+                <h1>
+                  Hello, {userName}
+                </h1>
+
+                <p className="welcome-sub">
+                  Ready to earn more today?
+                </p>
+              </div>
+
+            </div>
+
+            <div className="user-code">
+              <span>AURA CAMP ID</span>
+              <strong>
+                {profile?.user_code ||
+                  "AC----"}
+              </strong>
+            </div>
+
+          </section>
+
+          {/* =========================
+              WALLET
+          ========================== */}
+
+          <section className="wallet-grid">
+
+            <div className="wallet-card">
+
+              <div className="wallet-top">
+                <span>
+                  Available Balance
+                </span>
+
+                <div className="wallet-icon">
+                  ₹
                 </div>
               </div>
 
-              <h2 className="brand-title">
-                Simple offers.
-                <br />
-                <span>Real rewards.</span>
-              </h2>
+              <strong className="wallet-amount">
+                ₹{wallet.toFixed(2)}
+              </strong>
 
-              <p className="brand-description">
-                Discover offers, complete simple tasks,
-                earn rewards and manage your earnings
-                from one place.
-              </p>
+              <div className="wallet-bottom">
+                <span>
+                  Total earned
+                </span>
 
-              <div className="benefits">
+                <b>
+                  ₹{totalEarned.toFixed(2)}
+                </b>
+              </div>
 
-                <div className="benefit">
-                  <div className="benefit-icon">
-                    ✓
-                  </div>
-                  Secure account authentication
+            </div>
+
+            <div className="mini-card">
+
+              <span className="mini-icon blue">
+                ₹
+              </span>
+
+              <div>
+                <small>
+                  Pending Balance
+                </small>
+
+                <strong>
+                  ₹
+                  {pendingBalance.toFixed(
+                    2
+                  )}
+                </strong>
+              </div>
+
+            </div>
+
+            <div className="mini-card">
+
+              <span className="mini-icon green">
+                ✓
+              </span>
+
+              <div>
+                <small>
+                  Total Withdrawn
+                </small>
+
+                <strong>
+                  ₹
+                  {Number(
+                    profile?.total_withdrawn ||
+                      0
+                  ).toFixed(2)}
+                </strong>
+              </div>
+
+            </div>
+
+          </section>
+
+          {/* =========================
+              QUICK ACTIONS
+          ========================== */}
+
+          <section className="quick-grid">
+
+            <a
+              href="#offers"
+              className="quick-card"
+              onClick={() =>
+                setActiveNav("offers")
+              }
+            >
+              <span className="quick-icon blue-bg">
+                →
+              </span>
+
+              <div>
+                <strong>
+                  Earn Rewards
+                </strong>
+
+                <small>
+                  Explore available offers
+                </small>
+              </div>
+
+              <b>›</b>
+            </a>
+
+            <a
+              href="/withdrawal"
+              className="quick-card"
+            >
+              <span className="quick-icon green-bg">
+                ₹
+              </span>
+
+              <div>
+                <strong>
+                  Withdraw
+                </strong>
+
+                <small>
+                  Withdraw your earnings
+                </small>
+              </div>
+
+              <b>›</b>
+            </a>
+
+          </section>
+
+          {/* =========================
+              LATEST WITHDRAWAL
+          ========================== */}
+
+          {latestWithdrawal && (
+            <section className="section">
+
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">
+                    PAYOUT STATUS
+                  </p>
+
+                  <h2>
+                    Latest Withdrawal
+                  </h2>
                 </div>
 
-                <div className="benefit">
-                  <div className="benefit-icon">
-                    ⚡
-                  </div>
-                  Fast and simple earning experience
-                </div>
+                <a href="/withdrawal">
+                  View all →
+                </a>
+              </div>
 
-                <div className="benefit">
-                  <div className="benefit-icon">
+              <div className="withdrawal-card">
+
+                <div className="withdrawal-main">
+
+                  <div className="withdrawal-icon">
                     ₹
                   </div>
-                  Transparent rewards and withdrawals
+
+                  <div>
+                    <strong>
+                      ₹
+                      {Number(
+                        latestWithdrawal.amount
+                      ).toFixed(2)}
+                    </strong>
+
+                    <span>
+                      {String(
+                        latestWithdrawal.method
+                      ).toUpperCase()}{" "}
+                      •{" "}
+                      {new Date(
+                        latestWithdrawal.created_at
+                      ).toLocaleDateString(
+                        "en-IN",
+                        {
+                          day: "2-digit",
+                          month: "short",
+                          year: "numeric",
+                        }
+                      )}
+                    </span>
+                  </div>
+
                 </div>
 
+                {(() => {
+                  const status =
+                    withdrawalStatus(
+                      latestWithdrawal.status
+                    );
+
+                  return (
+                    <span
+                      className={`status ${status.className}`}
+                    >
+                      <i />
+                      {status.label}
+                    </span>
+                  );
+                })()}
+
               </div>
+
+            </section>
+          )}
+
+          {/* =========================
+              OFFERS
+          ========================== */}
+
+          <section
+            className="section"
+            id="offers"
+          >
+
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">
+                  EARN MORE
+                </p>
+
+                <h2>
+                  Available Offers
+                </h2>
+
+                <p>
+                  Complete offers and earn
+                  rewards.
+                </p>
+              </div>
+
+              <span className="offer-count">
+                {campaigns.length} Offers
+              </span>
             </div>
 
-            <div className="brand-bottom">
-              © {new Date().getFullYear()} AURACAMP
-              <br />
-              Independent Rewards Platform
-            </div>
+            {campaigns.length === 0 ? (
+              <div className="empty">
+
+                <div className="empty-icon">
+                  —
+                </div>
+
+                <h3>
+                  No offers available
+                </h3>
+
+                <p>
+                  New offers will appear
+                  here when available.
+                </p>
+
+              </div>
+            ) : (
+              <div className="offers">
+
+                {campaigns.map(
+                  (campaign) => (
+                    <article
+                      className="offer"
+                      key={campaign.id}
+                    >
+
+                      <div className="offer-image">
+
+                        {campaign.image_url ? (
+                          <img
+                            src={
+                              campaign.image_url
+                            }
+                            alt={
+                              campaign.name
+                            }
+                          />
+                        ) : (
+                          <div className="offer-placeholder">
+                            A
+                          </div>
+                        )}
+
+                        <span>
+                          +₹
+                          {Number(
+                            campaign.reward
+                          ).toFixed(2)}
+                        </span>
+
+                      </div>
+
+                      <div className="offer-content">
+
+                        <div className="offer-meta">
+
+                          <span>
+                            {campaign.category ||
+                              "Offer"}
+                          </span>
+
+                          <b>
+                            Available
+                          </b>
+
+                        </div>
+
+                        <h3>
+                          {campaign.name}
+                        </h3>
+
+                        <p>
+                          {campaign.description ||
+                            "Complete this offer and earn your reward."}
+                        </p>
+
+                        <div className="offer-footer">
+
+                          <div>
+                            <small>
+                              Reward
+                            </small>
+
+                            <strong>
+                              ₹
+                              {Number(
+                                campaign.reward
+                              ).toFixed(2)}
+                            </strong>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              startOffer(
+                                campaign
+                              )
+                            }
+                            disabled={
+                              startingOffer ===
+                              campaign.id
+                            }
+                          >
+                            {startingOffer ===
+                            campaign.id
+                              ? "Starting..."
+                              : "Start Offer"}
+                            <span>
+                              →
+                            </span>
+                          </button>
+
+                        </div>
+
+                      </div>
+
+                    </article>
+                  )
+                )}
+
+              </div>
+            )}
+
           </section>
 
           {/* =========================
-              AUTH
+              RECENT ACTIVITY
           ========================== */}
 
-          <section className="auth-panel">
-            <div className="auth-card">
+          <section className="section">
 
-              {/* MOBILE BRAND */}
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">
+                  WALLET
+                </p>
 
-              <div className="mobile-brand">
-                <div className="logo-mark">
-                  A
-                </div>
+                <h2>
+                  Recent Activity
+                </h2>
 
-                <div className="mobile-brand-name">
-                  AURACAMP
-                </div>
+                <p>
+                  Your latest wallet
+                  transactions.
+                </p>
               </div>
-
-              {/* =========================
-                  FORGOT PASSWORD
-              ========================== */}
-
-              {mode === "forgot" && (
-                <>
-                  <button
-                    className="back-button"
-                    type="button"
-                    onClick={() =>
-                      switchMode("login")
-                    }
-                  >
-                    ← Back to Login
-                  </button>
-
-                  <div className="auth-icon">
-                    A
-                  </div>
-
-                  <h1 className="auth-title">
-                    Forgot Password?
-                  </h1>
-
-                  <p className="auth-subtitle">
-                    Enter your registered email and
-                    we&apos;ll send you a secure reset link.
-                  </p>
-
-                  {message && (
-                    <div
-                      className={`message ${
-                        error
-                          ? "error"
-                          : "success"
-                      }`}
-                    >
-                      {message}
-                    </div>
-                  )}
-
-                  <form
-                    onSubmit={sendResetEmail}
-                  >
-                    <div className="field">
-                      <label className="field-label">
-                        Email Address
-                      </label>
-
-                      <div className="input-wrap">
-                        <span className="input-icon">
-                          @
-                        </span>
-
-                        <input
-                          className="input"
-                          type="email"
-                          value={email}
-                          onChange={(e) =>
-                            setEmail(
-                              e.target.value
-                            )
-                          }
-                          placeholder="Enter your email"
-                          autoComplete="email"
-                          disabled={busy}
-                        />
-                      </div>
-                    </div>
-
-                    <button
-                      className="primary-button"
-                      type="submit"
-                      disabled={busy}
-                    >
-                      {loading
-                        ? "Sending..."
-                        : "Send Reset Link →"}
-                    </button>
-                  </form>
-
-                  <div className="security">
-                    Secure password recovery
-                  </div>
-                </>
-              )}
-
-              {/* =========================
-                  RESET PASSWORD
-              ========================== */}
-
-              {mode === "reset" && (
-                <>
-                  <div className="auth-icon">
-                    A
-                  </div>
-
-                  <h1 className="auth-title">
-                    Create New Password
-                  </h1>
-
-                  <p className="auth-subtitle">
-                    Choose a strong new password
-                    for your AURACAMP account.
-                  </p>
-
-                  {message && (
-                    <div
-                      className={`message ${
-                        error
-                          ? "error"
-                          : "success"
-                      }`}
-                    >
-                      {message}
-                    </div>
-                  )}
-
-                  <form
-                    onSubmit={updatePassword}
-                  >
-
-                    <div className="field">
-                      <label className="field-label">
-                        New Password
-                      </label>
-
-                      <div className="input-wrap">
-                        <span className="input-icon">
-                          •
-                        </span>
-
-                        <input
-                          className="input"
-                          type={
-                            showPassword
-                              ? "text"
-                              : "password"
-                          }
-                          value={password}
-                          onChange={(e) =>
-                            setPassword(
-                              e.target.value
-                            )
-                          }
-                          placeholder="Enter new password"
-                          autoComplete="new-password"
-                          disabled={busy}
-                        />
-
-                        <button
-                          className="password-toggle"
-                          type="button"
-                          onClick={() =>
-                            setShowPassword(
-                              !showPassword
-                            )
-                          }
-                          disabled={busy}
-                        >
-                          {showPassword
-                            ? "●"
-                            : "○"}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="field">
-                      <label className="field-label">
-                        Confirm New Password
-                      </label>
-
-                      <div className="input-wrap">
-                        <span className="input-icon">
-                          •
-                        </span>
-
-                        <input
-                          className="input"
-                          type={
-                            showConfirmPassword
-                              ? "text"
-                              : "password"
-                          }
-                          value={
-                            confirmPassword
-                          }
-                          onChange={(e) =>
-                            setConfirmPassword(
-                              e.target.value
-                            )
-                          }
-                          placeholder="Confirm new password"
-                          autoComplete="new-password"
-                          disabled={busy}
-                        />
-
-                        <button
-                          className="password-toggle"
-                          type="button"
-                          onClick={() =>
-                            setShowConfirmPassword(
-                              !showConfirmPassword
-                            )
-                          }
-                          disabled={busy}
-                        >
-                          {showConfirmPassword
-                            ? "●"
-                            : "○"}
-                        </button>
-                      </div>
-                    </div>
-
-                    <button
-                      className="primary-button"
-                      type="submit"
-                      disabled={busy}
-                    >
-                      {loading
-                        ? "Updating..."
-                        : "Update Password →"}
-                    </button>
-                  </form>
-
-                  <div className="security">
-                    Your password stays private
-                  </div>
-                </>
-              )}
-
-              {/* =========================
-                  LOGIN / REGISTER
-              ========================== */}
-
-              {(mode === "login" ||
-                mode === "register") && (
-                <>
-                  <div className="auth-icon">
-                    A
-                  </div>
-
-                  <h1 className="auth-title">
-                    {mode === "register"
-                      ? "Create Account"
-                      : "Welcome Back"}
-                  </h1>
-
-                  <p className="auth-subtitle">
-                    {mode === "register"
-                      ? "Create your AURACAMP account and start earning."
-                      : "Login to continue your earning journey."}
-                  </p>
-
-                  {message && (
-                    <div
-                      className={`message ${
-                        error
-                          ? "error"
-                          : "success"
-                      }`}
-                    >
-                      {message}
-                    </div>
-                  )}
-
-                  <form onSubmit={submit}>
-
-                    {/* NAME */}
-
-                    {mode === "register" && (
-                      <div className="field">
-                        <label className="field-label">
-                          Full Name
-                        </label>
-
-                        <div className="input-wrap">
-                          <span className="input-icon">
-                            •
-                          </span>
-
-                          <input
-                            className="input"
-                            type="text"
-                            value={name}
-                            onChange={(e) =>
-                              setName(
-                                e.target.value
-                              )
-                            }
-                            placeholder="Enter your full name"
-                            autoComplete="name"
-                            disabled={busy}
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {/* EMAIL */}
-
-                    <div className="field">
-                      <label className="field-label">
-                        Email Address
-                      </label>
-
-                      <div className="input-wrap">
-                        <span className="input-icon">
-                          @
-                        </span>
-
-                        <input
-                          className="input"
-                          type="email"
-                          value={email}
-                          onChange={(e) =>
-                            setEmail(
-                              e.target.value
-                            )
-                          }
-                          placeholder="Enter your email"
-                          autoComplete="email"
-                          disabled={busy}
-                        />
-                      </div>
-                    </div>
-
-                    {/* PASSWORD */}
-
-                    <div className="field">
-                      <label className="field-label">
-                        Password
-                      </label>
-
-                      <div className="input-wrap">
-                        <span className="input-icon">
-                          •
-                        </span>
-
-                        <input
-                          className="input"
-                          type={
-                            showPassword
-                              ? "text"
-                              : "password"
-                          }
-                          value={password}
-                          onChange={(e) =>
-                            setPassword(
-                              e.target.value
-                            )
-                          }
-                          placeholder="Enter your password"
-                          autoComplete={
-                            mode === "register"
-                              ? "new-password"
-                              : "current-password"
-                          }
-                          disabled={busy}
-                        />
-
-                        <button
-                          className="password-toggle"
-                          type="button"
-                          onClick={() =>
-                            setShowPassword(
-                              !showPassword
-                            )
-                          }
-                          disabled={busy}
-                          aria-label={
-                            showPassword
-                              ? "Hide password"
-                              : "Show password"
-                          }
-                        >
-                          {showPassword
-                            ? "●"
-                            : "○"}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* CONFIRM PASSWORD */}
-
-                    {mode === "register" && (
-                      <div className="field">
-                        <label className="field-label">
-                          Confirm Password
-                        </label>
-
-                        <div className="input-wrap">
-                          <span className="input-icon">
-                            •
-                          </span>
-
-                          <input
-                            className="input"
-                            type={
-                              showConfirmPassword
-                                ? "text"
-                                : "password"
-                            }
-                            value={
-                              confirmPassword
-                            }
-                            onChange={(e) =>
-                              setConfirmPassword(
-                                e.target.value
-                              )
-                            }
-                            placeholder="Confirm your password"
-                            autoComplete="new-password"
-                            disabled={busy}
-                          />
-
-                          <button
-                            className="password-toggle"
-                            type="button"
-                            onClick={() =>
-                              setShowConfirmPassword(
-                                !showConfirmPassword
-                              )
-                            }
-                            disabled={busy}
-                          >
-                            {showConfirmPassword
-                              ? "●"
-                              : "○"}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* FORGOT */}
-
-                    {mode === "login" && (
-                      <div className="forgot-row">
-                        <button
-                          type="button"
-                          className="link-button"
-                          onClick={() =>
-                            switchMode(
-                              "forgot"
-                            )
-                          }
-                          disabled={busy}
-                        >
-                          Forgot Password?
-                        </button>
-                      </div>
-                    )}
-
-                    {/* SUBMIT */}
-
-                    <button
-                      className="primary-button"
-                      type="submit"
-                      disabled={busy}
-                    >
-                      {loading
-                        ? "Please wait..."
-                        : mode === "register"
-                        ? "Create Account →"
-                        : "Login →"}
-                    </button>
-                  </form>
-
-                  {/* DIVIDER */}
-
-                  <div className="divider">
-                    <div className="divider-line" />
-
-                    <span className="divider-text">
-                      OR
-                    </span>
-
-                    <div className="divider-line" />
-                  </div>
-
-                  {/* GOOGLE */}
-
-                  <button
-                    className="google-button"
-                    type="button"
-                    onClick={googleLogin}
-                    disabled={busy}
-                  >
-                    <span className="google-icon">
-                      G
-                    </span>
-
-                    {googleLoading
-                      ? "Connecting..."
-                      : "Continue with Google"}
-                  </button>
-
-                  {/* SWITCH */}
-
-                  <div className="switch-text">
-                    {mode === "register"
-                      ? "Already have an account?"
-                      : "Don't have an account?"}
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        switchMode(
-                          mode === "register"
-                            ? "login"
-                            : "register"
-                        )
-                      }
-                      disabled={busy}
-                    >
-                      {mode === "register"
-                        ? "Login"
-                        : "Create Account"}
-                    </button>
-                  </div>
-
-                  {/* TERMS */}
-
-                  <div className="legal">
-                    By continuing, you agree to our{" "}
-                    <a href="/terms">
-                      Terms of Service
-                    </a>{" "}
-                    and{" "}
-                    <a href="/privacy">
-                      Privacy Policy
-                    </a>
-                    .
-                  </div>
-
-                  {/* SECURITY */}
-
-                  <div className="security">
-                    Secure Login
-                    <span>•</span>
-                    Fast & Easy
-                  </div>
-                </>
-              )}
             </div>
+
+            {transactions.length === 0 ? (
+              <div className="empty compact">
+
+                <div className="empty-icon">
+                  —
+                </div>
+
+                <h3>
+                  No transactions yet
+                </h3>
+
+                <p>
+                  Your earnings will appear
+                  here after completing offers.
+                </p>
+
+              </div>
+            ) : (
+              <div className="transactions">
+
+                {transactions.map(
+                  (transaction) => {
+
+                    const positive =
+                      Number(
+                        transaction.amount
+                      ) >= 0;
+
+                    return (
+                      <div
+                        className="transaction"
+                        key={transaction.id}
+                      >
+
+                        <div className="transaction-left">
+
+                          <div
+                            className={
+                              positive
+                                ? "transaction-icon positive"
+                                : "transaction-icon negative"
+                            }
+                          >
+                            {positive
+                              ? "+"
+                              : "−"}
+                          </div>
+
+                          <div>
+                            <strong>
+                              {transactionTitle(
+                                transaction
+                              )}
+                            </strong>
+
+                            <small>
+                              {new Date(
+                                transaction.created_at
+                              ).toLocaleDateString(
+                                "en-IN",
+                                {
+                                  day: "2-digit",
+                                  month: "short",
+                                  year: "numeric",
+                                }
+                              )}
+                            </small>
+                          </div>
+
+                        </div>
+
+                        <strong
+                          className={
+                            positive
+                              ? "amount-positive"
+                              : "amount-negative"
+                          }
+                        >
+                          {positive
+                            ? "+"
+                            : "−"}
+                          ₹
+                          {Math.abs(
+                            Number(
+                              transaction.amount
+                            )
+                          ).toFixed(2)}
+                        </strong>
+
+                      </div>
+                    );
+                  }
+                )}
+
+              </div>
+            )}
+
           </section>
+
+          {/* =========================
+              FOOTER
+          ========================== */}
+
+          <footer className="footer">
+
+            <div className="footer-brand">
+              <span className="footer-logo">
+                A
+              </span>
+
+              <div>
+                <strong>
+                  AURACAMP
+                </strong>
+
+                <small>
+                  Independent Rewards Platform
+                </small>
+              </div>
+            </div>
+
+            <div className="footer-links">
+              <a href="/terms">
+                Terms
+              </a>
+
+              <a href="/privacy">
+                Privacy
+              </a>
+
+              <a href="/support">
+                Support
+              </a>
+            </div>
+
+            <span className="copyright">
+              © {new Date().getFullYear()} AURA CAMP
+            </span>
+
+          </footer>
+
         </div>
+
+        {/* =========================
+            MOBILE BOTTOM NAV
+        ========================== */}
+
+        <nav className="mobile-nav">
+
+          <a
+            href="/"
+            className={
+              activeNav === "home"
+                ? "mobile-nav-item active"
+                : "mobile-nav-item"
+            }
+            onClick={() =>
+              setActiveNav("home")
+            }
+          >
+            <span>⌂</span>
+            Home
+          </a>
+
+          <a
+            href="#offers"
+            className={
+              activeNav === "offers"
+                ? "mobile-nav-item active"
+                : "mobile-nav-item"
+            }
+            onClick={() =>
+              setActiveNav("offers")
+            }
+          >
+            <span>+</span>
+            Earn
+          </a>
+
+          <a
+            href="/withdrawal"
+            className="mobile-nav-item"
+          >
+            <span>₹</span>
+            Withdraw
+          </a>
+
+          <a
+            href="/profile"
+            className="mobile-nav-item"
+          >
+            <span>
+              {userName
+                .charAt(0)
+                .toUpperCase()}
+            </span>
+            Profile
+          </a>
+
+        </nav>
+
       </main>
     </>
   );
 }
+
+/* =========================================================
+   DESIGN SYSTEM
+========================================================= */
+
+const styles = `
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100%;
+}
+
+body {
+  overflow-x: hidden;
+  background: #f5f8fc;
+  color: #111827;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+a {
+  text-decoration: none;
+}
+
+/* =========================
+   LOADING
+========================= */
+
+.loading-page {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(
+      circle at 50% 30%,
+      rgba(46, 102, 235, .08),
+      transparent 35%
+    ),
+    #f5f8fc;
+}
+
+.loading-card {
+  width: min(320px, 90%);
+  padding: 34px;
+  border: 1px solid #e4eaf2;
+  border-radius: 24px;
+  background: #fff;
+  text-align: center;
+  box-shadow:
+    0 25px 70px rgba(15, 23, 42, .08);
+}
+
+.loading-card .logo-mark {
+  margin: 0 auto 14px;
+}
+
+.loading-brand {
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -.6px;
+}
+
+.loading-line {
+  width: 90px;
+  height: 3px;
+  margin: 18px auto;
+  border-radius: 99px;
+  background:
+    linear-gradient(
+      90deg,
+      #2468ee,
+      #6a42e8
+    );
+  animation: loading 1.2s ease-in-out infinite;
+}
+
+.loading-card p {
+  margin: 0;
+  color: #7a8799;
+  font-size: 12px;
+}
+
+@keyframes loading {
+  0% {
+    transform: scaleX(.4);
+    opacity: .5;
+  }
+
+  50% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+
+  100% {
+    transform: scaleX(.4);
+    opacity: .5;
+  }
+}
+
+/* =========================
+   APP
+========================= */
+
+.app {
+  min-height: 100svh;
+  background:
+    radial-gradient(
+      circle at 5% 0%,
+      rgba(44, 103, 235, .055),
+      transparent 25%
+    ),
+    radial-gradient(
+      circle at 95% 20%,
+      rgba(91, 72, 221, .045),
+      transparent 25%
+    ),
+    #f5f8fc;
+}
+
+/* =========================
+   TOPBAR
+========================= */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  border-bottom: 1px solid rgba(225, 231, 240, .9);
+  background: rgba(255,255,255,.93);
+  backdrop-filter: blur(18px);
+}
+
+.topbar-inner {
+  width: min(1180px, calc(100% - 36px));
+  min-height: 74px;
+  margin: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: #111827;
+}
+
+.brand-logo,
+.logo-mark,
+.footer-logo {
+  display: grid;
+  place-items: center;
+  color: white;
+  background:
+    linear-gradient(
+      145deg,
+      #1d6cff,
+      #4257ed 55%,
+      #703ce5
+    );
+  box-shadow:
+    0 9px 20px rgba(43, 91, 225, .20),
+    inset 0 1px rgba(255,255,255,.55);
+}
+
+.brand-logo {
+  width: 39px;
+  height: 39px;
+  border-radius: 12px;
+  font-weight: 900;
+}
+
+.brand strong {
+  display: block;
+  font-size: 17px;
+  letter-spacing: -.5px;
+}
+
+.brand small {
+  display: block;
+  margin-top: 2px;
+  color: #8793a5;
+  font-size: 9px;
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.notification {
+  position: relative;
+  width: 39px;
+  height: 39px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #e0e6ef;
+  border-radius: 12px;
+  background: white;
+  cursor: pointer;
+}
+
+.notification svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: #344054;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+
+.notification span {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  top: 8px;
+  right: 8px;
+  border-radius: 50%;
+  background: #2468ee;
+}
+
+.logout {
+  height: 39px;
+  padding: 0 15px;
+  border: 1px solid #dce3ec;
+  border-radius: 12px;
+  background: white;
+  color: #344054;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* =========================
+   CONTAINER
+========================= */
+
+.container {
+  width: min(1180px, calc(100% - 36px));
+  margin: auto;
+  padding: 30px 0 55px;
+}
+
+/* =========================
+   MESSAGE
+========================= */
+
+.message {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 15px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.message span {
+  width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 21px;
+  border-radius: 50%;
+}
+
+.message.success {
+  border: 1px solid #b7ebcb;
+  color: #087443;
+  background: #f0fdf4;
+}
+
+.message.success span {
+  background: #d1fadf;
+}
+
+.message.error {
+  border: 1px solid #fecaca;
+  color: #b42318;
+  background: #fff5f4;
+}
+
+.message.error span {
+  background: #fee2e2;
+}
+
+/* =========================
+   WELCOME
+========================= */
+
+.welcome {
+  min-height: 145px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 25px;
+  padding: 30px;
+  border: 1px solid #e1e8f1;
+  border-radius: 24px;
+  background:
+    linear-gradient(
+      120deg,
+      #ffffff,
+      #f7faff
+    );
+  box-shadow:
+    0 18px 45px rgba(15,23,42,.055);
+}
+
+.welcome-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.avatar {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 58px;
+  border: 4px solid white;
+  border-radius: 19px;
+  color: white;
+  background:
+    linear-gradient(
+      145deg,
+      #2b70ef,
+      #5947e6
+    );
+  box-shadow:
+    0 10px 25px rgba(44, 94, 221, .20);
+  font-size: 21px;
+  font-weight: 900;
+}
+
+.eyebrow {
+  margin: 0 0 5px;
+  color: #718096;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 1.1px;
+}
+
+.welcome h1 {
+  margin: 0;
+  color: #101828;
+  font-size: 27px;
+  line-height: 1.15;
+  letter-spacing: -.9px;
+}
+
+.welcome-sub {
+  margin: 6px 0 0;
+  color: #7b8798;
+  font-size: 12px;
+}
+
+.user-code {
+  min-width: 150px;
+  padding: 13px 15px;
+  border: 1px solid #dce6f4;
+  border-radius: 14px;
+  background: #f8fbff;
+}
+
+.user-code span {
+  display: block;
+  color: #8390a3;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: .8px;
+}
+
+.user-code strong {
+  display: block;
+  margin-top: 4px;
+  color: #245edc;
+  font-size: 17px;
+  letter-spacing: .4px;
+}
+
+/* =========================
+   WALLET
+========================= */
+
+.wallet-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 13px;
+  margin-top: 15px;
+}
+
+.wallet-card {
+  position: relative;
+  overflow: hidden;
+  min-height: 160px;
+  padding: 22px;
+  border-radius: 21px;
+  color: white;
+  background:
+    linear-gradient(
+      135deg,
+      #172238,
+      #202f4a
+    );
+  box-shadow:
+    0 18px 38px rgba(20, 36, 64, .18);
+}
+
+.wallet-card::after {
+  content: "";
+  position: absolute;
+  width: 190px;
+  height: 190px;
+  right: -70px;
+  top: -80px;
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 50%;
+}
+
+.wallet-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wallet-top span {
+  color: rgba(255,255,255,.68);
+  font-size: 11px;
+}
+
+.wallet-icon {
+  width: 33px;
+  height: 33px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 10px;
+  background: rgba(255,255,255,.08);
+  font-weight: 800;
+}
+
+.wallet-amount {
+  display: block;
+  margin-top: 12px;
+  font-size: 31px;
+  letter-spacing: -1.2px;
+}
+
+.wallet-bottom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: rgba(255,255,255,.58);
+  font-size: 10px;
+}
+
+.wallet-bottom b {
+  color: white;
+}
+
+.mini-card {
+  min-height: 160px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid #e2e8f0;
+  border-radius: 21px;
+  background: white;
+  box-shadow:
+    0 12px 28px rgba(15,23,42,.045);
+}
+
+.mini-card small {
+  display: block;
+  color: #7a8798;
+  font-size: 10px;
+}
+
+.mini-card strong {
+  display: block;
+  margin-top: 5px;
+  color: #101828;
+  font-size: 20px;
+  letter-spacing: -.5px;
+}
+
+.mini-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 40px;
+  border-radius: 13px;
+  font-weight: 900;
+}
+
+.mini-icon.blue {
+  color: #245edc;
+  background: #edf4ff;
+}
+
+.mini-icon.green {
+  color: #087443;
+  background: #ecfdf3;
+}
+
+/* =========================
+   QUICK
+========================= */
+
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 13px;
+  margin-top: 15px;
+}
+
+.quick-card {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-height: 72px;
+  padding: 14px 17px;
+  border: 1px solid #e2e8f0;
+  border-radius: 17px;
+  color: #111827;
+  background: white;
+  box-shadow:
+    0 10px 24px rgba(15,23,42,.035);
+  transition:
+    transform .16s ease,
+    box-shadow .16s ease;
+}
+
+.quick-card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 15px 30px rgba(15,23,42,.07);
+}
+
+.quick-icon {
+  width: 39px;
+  height: 39px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  font-weight: 900;
+}
+
+.blue-bg {
+  color: #245edc;
+  background: #edf4ff;
+}
+
+.green-bg {
+  color: #087443;
+  background: #ecfdf3;
+}
+
+.quick-card div {
+  flex: 1;
+}
+
+.quick-card strong {
+  display: block;
+  font-size: 12px;
+}
+
+.quick-card small {
+  display: block;
+  margin-top: 3px;
+  color: #8490a2;
+  font-size: 10px;
+}
+
+.quick-card > b {
+  color: #98a2b3;
+  font-size: 19px;
+}
+
+/* =========================
+   SECTIONS
+========================= */
+
+.section {
+  margin-top: 34px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 15px;
+  margin-bottom: 13px;
+}
+
+.section-heading h2 {
+  margin: 0;
+  color: #101828;
+  font-size: 20px;
+  letter-spacing: -.5px;
+}
+
+.section-heading p:not(.eyebrow) {
+  margin: 5px 0 0;
+  color: #7c8798;
+  font-size: 10px;
+}
+
+.section-heading a {
+  color: #245edc;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.offer-count {
+  padding: 7px 10px;
+  border-radius: 99px;
+  color: #245edc;
+  background: #edf4ff;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+/* =========================
+   WITHDRAWAL
+========================= */
+
+.withdrawal-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 17px;
+  border: 1px solid #e1e7ef;
+  border-radius: 17px;
+  background: white;
+  box-shadow:
+    0 10px 24px rgba(15,23,42,.035);
+}
+
+.withdrawal-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.withdrawal-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  color: #245edc;
+  background: #edf4ff;
+  font-weight: 900;
+}
+
+.withdrawal-main strong {
+  display: block;
+  font-size: 16px;
+}
+
+.withdrawal-main span {
+  display: block;
+  margin-top: 3px;
+  color: #8994a5;
+  font-size: 9px;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 99px;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.status-paid {
+  color: #087443;
+  background: #ecfdf3;
+}
+
+.status-paid i {
+  background: #16a34a;
+}
+
+.status-pending {
+  color: #9a6700;
+  background: #fff8db;
+}
+
+.status-pending i {
+  background: #eab308;
+}
+
+.status-rejected {
+  color: #b42318;
+  background: #fff1f0;
+}
+
+.status-rejected i {
+  background: #ef4444;
+}
+
+/* =========================
+   OFFERS
+========================= */
+
+.offers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.offer {
+  overflow: hidden;
+  border: 1px solid #e1e7ef;
+  border-radius: 19px;
+  background: white;
+  box-shadow:
+    0 12px 28px rgba(15,23,42,.04);
+  transition:
+    transform .18s ease,
+    box-shadow .18s ease;
+}
+
+.offer:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 17px 35px rgba(15,23,42,.07);
+}
+
+.offer-image {
+  position: relative;
+  height: 145px;
+  overflow: hidden;
+  background: #eef3fa;
+}
+
+.offer-image img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.offer-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #3266df;
+  font-size: 42px;
+  font-weight: 900;
+  background:
+    linear-gradient(
+      135deg,
+      #edf5ff,
+      #f3f0ff
+    );
+}
+
+.offer-image > span {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  color: #087443;
+  background: rgba(240,253,244,.95);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.offer-content {
+  padding: 15px;
+}
+
+.offer-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.offer-meta span {
+  color: #6e7b8e;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.offer-meta b {
+  padding: 4px 7px;
+  border-radius: 99px;
+  color: #087443;
+  background: #ecfdf3;
+  font-size: 8px;
+}
+
+.offer h3 {
+  margin: 9px 0 5px;
+  color: #101828;
+  font-size: 15px;
+  letter-spacing: -.25px;
+}
+
+.offer-content > p {
+  min-height: 34px;
+  margin: 0;
+  color: #7c8798;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.offer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #edf0f4;
+}
+
+.offer-footer small {
+  display: block;
+  color: #98a2b3;
+  font-size: 8px;
+}
+
+.offer-footer strong {
+  display: block;
+  margin-top: 2px;
+  color: #101828;
+  font-size: 14px;
+}
+
+.offer-footer button {
+  min-height: 37px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 10px;
+  color: white;
+  background:
+    linear-gradient(
+      100deg,
+      #1c293e,
+      #26344b
+    );
+  box-shadow:
+    0 7px 15px rgba(15,23,42,.12);
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.offer-footer button span {
+  margin-left: 5px;
+}
+
+.offer-footer button:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+/* =========================
+   EMPTY
+========================= */
+
+.empty {
+  padding: 40px 20px;
+  border: 1px dashed #dbe2eb;
+  border-radius: 18px;
+  background: rgba(255,255,255,.65);
+  text-align: center;
+}
+
+.empty.compact {
+  padding: 30px 20px;
+}
+
+.empty-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  margin: auto;
+  border-radius: 12px;
+  color: #667085;
+  background: #f1f4f8;
+  font-weight: 900;
+}
+
+.empty h3 {
+  margin: 11px 0 5px;
+  font-size: 13px;
+}
+
+.empty p {
+  margin: 0;
+  color: #8a95a5;
+  font-size: 10px;
+}
+
+/* =========================
+   TRANSACTIONS
+========================= */
+
+.transactions {
+  overflow: hidden;
+  border: 1px solid #e1e7ef;
+  border-radius: 17px;
+  background: white;
+}
+
+.transaction {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.transaction:last-child {
+  border-bottom: 0;
+}
+
+.transaction-left {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.transaction-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  border-radius: 11px;
+  font-weight: 900;
+}
+
+.transaction-icon.positive {
+  color: #087443;
+  background: #ecfdf3;
+}
+
+.transaction-icon.negative {
+  color: #b42318;
+  background: #fff1f0;
+}
+
+.transaction-left strong {
+  display: block;
+  overflow: hidden;
+  color: #344054;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.transaction-left small {
+  display: block;
+  margin-top: 3px;
+  color: #98a2b3;
+  font-size: 9px;
+}
+
+.amount-positive,
+.amount-negative {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.amount-positive {
+  color: #059669;
+}
+
+.amount-negative {
+  color: #ef4444;
+}
+
+/* =========================
+   FOOTER
+========================= */
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 50px;
+  padding-top: 22px;
+  border-top: 1px solid #e2e7ee;
+}
+
+.footer-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.footer-logo {
+  width: 31px;
+  height: 31px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.footer-brand strong {
+  display: block;
+  font-size: 11px;
+}
+
+.footer-brand small {
+  display: block;
+  margin-top: 2px;
+  color: #98a2b3;
+  font-size: 8px;
+}
+
+.footer-links {
+  display: flex;
+  gap: 16px;
+}
+
+.footer-links a {
+  color: #667085;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.copyright {
+  color: #98a2b3;
+  font-size: 8px;
+}
+
+/* =========================
+   MOBILE NAV
+========================= */
+
+.mobile-nav {
+  display: none;
+}
+
+/* =========================
+   TABLET
+========================= */
+
+@media (max-width: 900px) {
+
+  .wallet-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .wallet-card {
+    grid-column: 1 / -1;
+  }
+
+  .offers {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================
+   MOBILE
+========================= */
+
+@media (max-width: 640px) {
+
+  body {
+    background: #f5f8fc;
+  }
+
+  .topbar-inner,
+  .container {
+    width: calc(100% - 24px);
+  }
+
+  .topbar-inner {
+    min-height: 64px;
+  }
+
+  .brand-logo {
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+  }
+
+  .brand strong {
+    font-size: 15px;
+  }
+
+  .brand small {
+    display: none;
+  }
+
+  .logout {
+    padding: 0 11px;
+    font-size: 10px;
+  }
+
+  .notification {
+    width: 36px;
+    height: 36px;
+  }
+
+  .container {
+    padding-top: 17px;
+    padding-bottom: 88px;
+  }
+
+  .welcome {
+    min-height: auto;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px;
+    border-radius: 20px;
+  }
+
+  .welcome-left {
+    width: 100%;
+  }
+
+  .avatar {
+    width: 49px;
+    height: 49px;
+    flex-basis: 49px;
+    border-radius: 16px;
+    font-size: 18px;
+  }
+
+  .welcome h1 {
+    font-size: 22px;
+  }
+
+  .welcome-sub {
+    font-size: 10px;
+  }
+
+  .user-code {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .wallet-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .wallet-card {
+    grid-column: 1 / -1;
+    min-height: 155px;
+    padding: 19px;
+    border-radius: 19px;
+  }
+
+  .wallet-amount {
+    font-size: 29px;
+  }
+
+  .mini-card {
+    min-height: 100px;
+    padding: 14px;
+    gap: 9px;
+    border-radius: 16px;
+  }
+
+  .mini-card strong {
+    font-size: 15px;
+  }
+
+  .mini-icon {
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
+    border-radius: 10px;
+  }
+
+  .quick-grid {
+    grid-template-columns: 1fr;
+    gap: 9px;
+  }
+
+  .quick-card {
+    min-height: 64px;
+  }
+
+  .section {
+    margin-top: 27px;
+  }
+
+  .section-heading h2 {
+    font-size: 18px;
+  }
+
+  .offers {
+    gap: 11px;
+  }
+
+  .offer {
+    border-radius: 17px;
+  }
+
+  .offer-image {
+    height: 145px;
+  }
+
+  .offer-content {
+    padding: 14px;
+  }
+
+  .withdrawal-card {
+    padding: 14px;
+    border-radius: 15px;
+  }
+
+  .status {
+    padding: 6px 8px;
+    font-size: 8px;
+  }
+
+  .footer {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+    margin-bottom: 20px;
+  }
+
+  .footer-links {
+    justify-content: flex-end;
+  }
+
+  .copyright {
+    grid-column: 1 / -1;
+  }
+
+  /* MOBILE BOTTOM NAV */
+
+  .mobile-nav {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    z-index: 100;
+    height: 63px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    align-items: center;
+    padding: 5px;
+    border: 1px solid rgba(220,227,237,.95);
+    border-radius: 19px;
+    background: rgba(255,255,255,.96);
+    backdrop-filter: blur(18px);
+    box-shadow:
+      0 15px 40px rgba(15,23,42,.13);
+  }
+
+  .mobile-nav-item {
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 3px;
+    border-radius: 14px;
+    color: #8792a3;
+    font-size: 8px;
+    font-weight: 800;
+  }
+
+  .mobile-nav-item span {
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 900;
+  }
+
+  .mobile-nav-item.active {
+    color: #245edc;
+    background: #edf4ff;
+  }
+
+  .mobile-nav-item.active span {
+    background: #dce9ff;
+  }
+}
+
+/* =========================
+   SMALL PHONES
+========================= */
+
+@media (max-width: 380px) {
+
+  .container,
+  .topbar-inner {
+    width: calc(100% - 20px);
+  }
+
+  .welcome {
+    padding: 17px;
+  }
+
+  .wallet-amount {
+    font-size: 26px;
+  }
+
+  .mini-card {
+    padding: 11px;
+  }
+
+  .mini-card strong {
+    font-size: 14px;
+  }
+
+  .offer-image {
+    height: 125px;
+  }
+}
+
+`;
