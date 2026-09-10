@@ -821,7 +821,6 @@ const campaignTop: React.CSSProperties = {
 };
 
 const campaignName: React.CSSProperties = {
-  margin: 0
   margin: 0,
   fontSize: 17,
 };
