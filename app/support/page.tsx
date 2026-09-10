@@ -171,7 +171,28 @@ export default function SupportPage() {
             Need help? Create a support ticket and our team will review it.
           </p>
         </section>
-
+<div style={{ marginBottom: "18px" }}>
+  <a
+    href="https://t.me/MrRustam40"
+    target="_blank"
+    rel="noopener noreferrer"
+    style={{
+      display: "block",
+      width: "100%",
+      boxSizing: "border-box",
+      padding: "15px",
+      borderRadius: "13px",
+      background: "#229ED9",
+      color: "#fff",
+      textAlign: "center",
+      textDecoration: "none",
+      fontWeight: 700,
+      fontSize: "16px",
+    }}
+  >
+    💬 Chat with us on Telegram
+  </a>
+</div>
         <section style={styles.card}>
           <h2 style={styles.cardTitle}>Create Support Ticket</h2>
           <p style={styles.cardSubtitle}>
