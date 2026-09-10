@@ -1849,3 +1849,263 @@ export default function AdminPage() {
               </div>
             </section>
           )}
+                  </div>
+
+        {selectedWithdrawal &&
+          withdrawalAction && (
+            <div
+              style={styles.modalOverlay}
+              onClick={closeWithdrawalAction}
+            >
+              <div
+                style={styles.modalCard}
+                onClick={(event) =>
+                  event.stopPropagation()
+                }
+              >
+                <div style={styles.modalHeader}>
+                  <div>
+                    <div style={styles.modalEyebrow}>
+                      WITHDRAWAL ACTION
+                    </div>
+
+                    <h3 style={styles.modalTitle}>
+                      {withdrawalAction === "approve"
+                        ? "Approve Withdrawal"
+                        : "Reject Withdrawal"}
+                    </h3>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={closeWithdrawalAction}
+                    style={styles.closeButton}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div style={styles.modalSummary}>
+                  <div>
+                    <span>User</span>
+                    <strong>
+                      {getUserName(
+                        selectedWithdrawal.user_id
+                      )}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span>Amount</span>
+                    <strong>
+                      ₹
+                      {Number(
+                        selectedWithdrawal.amount
+                      ).toFixed(2)}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span>Method</span>
+                    <strong>
+                      {selectedWithdrawal.method.toUpperCase()}
+                    </strong>
+                  </div>
+                </div>
+
+                <label style={styles.label}>
+                  {withdrawalAction === "approve"
+                    ? "Admin Note"
+                    : "Rejection Reason *"}
+
+                  <textarea
+                    value={withdrawalNote}
+                    onChange={(event) =>
+                      setWithdrawalNote(
+                        event.target.value
+                      )
+                    }
+                    placeholder={
+                      withdrawalAction === "approve"
+                        ? "Optional note..."
+                        : "Enter reason for rejection..."
+                    }
+                    rows={4}
+                    style={styles.textarea}
+                  />
+                </label>
+
+                {withdrawalAction === "reject" && (
+                  <div style={styles.warningBox}>
+                    The existing database RPC should refund
+                    the rejected withdrawal amount to the
+                    user's wallet.
+                  </div>
+                )}
+
+                <div style={styles.modalActions}>
+                  <button
+                    type="button"
+                    onClick={closeWithdrawalAction}
+                    style={styles.secondaryButton}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={processWithdrawal}
+                    disabled={
+                      actionId === selectedWithdrawal.id
+                    }
+                    style={{
+                      ...(withdrawalAction === "approve"
+                        ? styles.successButton
+                        : styles.dangerButton),
+                      opacity:
+                        actionId === selectedWithdrawal.id
+                          ? 0.6
+                          : 1,
+                    }}
+                  >
+                    {actionId === selectedWithdrawal.id
+                      ? "Processing..."
+                      : withdrawalAction === "approve"
+                      ? "Approve Withdrawal"
+                      : "Reject Withdrawal"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+      </main>
+    </>
+  );
+}
+
+function Input({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: string;
+}) {
+  return (
+    <label style={styles.label}>
+      {label}
+
+      <input
+        type={type}
+        value={value}
+        onChange={(event) =>
+          onChange(event.target.value)
+        }
+        placeholder={placeholder}
+        style={styles.input}
+      />
+    </label>
+  );
+}
+
+function Textarea({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <label style={styles.label}>
+      {label}
+
+      <textarea
+        value={value}
+        onChange={(event) =>
+          onChange(event.target.value)
+        }
+        placeholder={placeholder}
+        rows={4}
+        style={styles.textarea}
+      />
+    </label>
+  );
+}
+
+function StatCard({
+  icon,
+  title,
+  value,
+  subtitle,
+}: {
+  icon: string;
+  title: string;
+  value: string;
+  subtitle: string;
+}) {
+  return (
+    <div style={styles.statCard}>
+      <div style={styles.statIcon}>{icon}</div>
+
+      <div style={styles.statContent}>
+        <span style={styles.statTitle}>
+          {title}
+        </span>
+
+        <strong style={styles.statNumber}>
+          {value}
+        </strong>
+
+        <small style={styles.statSubtitle}>
+          {subtitle}
+        </small>
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({
+  icon,
+  title,
+  text,
+}: {
+  icon: string;
+  title: string;
+  text: string;
+}) {
+  return (
+    <div style={styles.emptyState}>
+      <div style={styles.emptyIcon}>{icon}</div>
+
+      <h3 style={styles.emptyTitle}>{title}</h3>
+
+      <p style={styles.emptyText}>{text}</p>
+    </div>
+  );
+}
+
+function PaymentField({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div style={styles.paymentField}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+const styles: Record<string, CSSProperties> = {
