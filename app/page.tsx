@@ -1291,6 +1291,10 @@ const styles: Record<string, CSSProperties> = {
   },
 
   emptyBox: {
-    background: "rgba(255,255,255,0.9)",
-    borderRadius: "20px",
-    padding: "40px 20px
+  background: "rgba(255,255,255,0.9)",
+  borderRadius: "20px",
+  padding: "40px 20px",
+  textAlign: "center",
+  color: "#64748b",
+  border: "1px solid #e8edf5",
+},
