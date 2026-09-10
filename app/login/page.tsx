@@ -9,6 +9,9 @@ const supabase = createClient(
   {
     auth: {
       flowType: "pkce",
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
     },
   }
 );
@@ -24,7 +27,8 @@ export default function LoginPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] =
+    useState(false);
 
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
@@ -33,22 +37,33 @@ export default function LoginPage() {
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-
-    if (params.get("mode") === "reset") {
-      setMode("reset");
-    }
-
-    checkExistingSession();
+    initializeAuth();
   }, []);
 
-  async function checkExistingSession() {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+  async function initializeAuth() {
+    try {
+      const params = new URLSearchParams(
+        window.location.search
+      );
 
-    if (session && !window.location.search.includes("mode=reset")) {
-      window.location.href = "/";
+      const recovery =
+        params.get("mode") === "reset" ||
+        window.location.hash.includes("type=recovery");
+
+      if (recovery) {
+        setMode("reset");
+        return;
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (session) {
+        window.location.replace("/");
+      }
+    } catch {
+      // Keep login page silent if session check fails.
     }
   }
 
@@ -69,9 +84,55 @@ export default function LoginPage() {
     setShowConfirmPassword(false);
 
     clearMessage();
+
+    if (nextMode !== "reset") {
+      window.history.replaceState(
+        {},
+        "",
+        "/login"
+      );
+    }
   }
 
-  async function submit(e: React.FormEvent<HTMLFormElement>) {
+  function friendlyError(message: string) {
+    const text = message.toLowerCase();
+
+    if (
+      text.includes("invalid login credentials") ||
+      text.includes("invalid credentials")
+    ) {
+      return "Incorrect email or password.";
+    }
+
+    if (text.includes("email not confirmed")) {
+      return "Please verify your email before logging in.";
+    }
+
+    if (text.includes("user already registered")) {
+      return "An account with this email already exists. Please login.";
+    }
+
+    if (text.includes("password should be at least")) {
+      return "Password must contain at least 6 characters.";
+    }
+
+    if (
+      text.includes("rate limit") ||
+      text.includes("too many requests")
+    ) {
+      return "Too many attempts. Please wait a moment and try again.";
+    }
+
+    if (text.includes("network")) {
+      return "Network error. Please check your internet connection.";
+    }
+
+    return message || "Something went wrong. Please try again.";
+  }
+
+  async function submit(
+    e: React.FormEvent<HTMLFormElement>
+  ) {
     e.preventDefault();
 
     clearMessage();
@@ -97,7 +158,9 @@ export default function LoginPage() {
     }
 
     if (password.length < 6) {
-      setMessage("Password must contain at least 6 characters.");
+      setMessage(
+        "Password must contain at least 6 characters."
+      );
       setError(true);
       return;
     }
@@ -128,6 +191,8 @@ export default function LoginPage() {
               data: {
                 full_name: name.trim(),
               },
+              emailRedirectTo:
+                `${window.location.origin}/auth/callback`,
             },
           });
 
@@ -135,16 +200,23 @@ export default function LoginPage() {
           throw signUpError;
         }
 
+        /*
+         * Email confirmation ON:
+         * data.session === null
+         *
+         * Do NOT redirect.
+         * User must verify email first.
+         */
         if (data.session) {
-          window.location.href = "/";
+          window.location.replace("/");
           return;
         }
 
         setMessage(
-          "Account created. Please check your email to verify your account."
+          "Account created. Please check your email and verify your account before logging in."
         );
-        setError(false);
 
+        setError(false);
         setPassword("");
         setConfirmPassword("");
       } else {
@@ -158,18 +230,25 @@ export default function LoginPage() {
           throw loginError;
         }
 
-        window.location.href = "/";
-        return;
+        setMessage(
+          "Login successful. Redirecting..."
+        );
+        setError(false);
+
+        setTimeout(() => {
+          window.location.replace("/");
+        }, 400);
       }
     } catch (err: unknown) {
       setError(true);
 
-      const text =
-        err instanceof Error
-          ? err.message
-          : "Something went wrong. Please try again.";
-
-      setMessage(getFriendlyError(text));
+      setMessage(
+        friendlyError(
+          err instanceof Error
+            ? err.message
+            : "Something went wrong."
+        )
+      );
     } finally {
       setLoading(false);
     }
@@ -179,18 +258,30 @@ export default function LoginPage() {
     clearMessage();
     setGoogleLoading(true);
 
-    const { error: googleError } =
-      await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo:
-            `${window.location.origin}/auth/callback`,
-        },
-      });
+    try {
+      const { error: googleError } =
+        await supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo:
+              `${window.location.origin}/auth/callback`,
+          },
+        });
 
-    if (googleError) {
-      setMessage(getFriendlyError(googleError.message));
+      if (googleError) {
+        throw googleError;
+      }
+    } catch (err: unknown) {
       setError(true);
+
+      setMessage(
+        friendlyError(
+          err instanceof Error
+            ? err.message
+            : "Unable to continue with Google."
+        )
+      );
+
       setGoogleLoading(false);
     }
   }
@@ -235,14 +326,17 @@ export default function LoginPage() {
       setMessage(
         "Password reset link sent. Please check your email."
       );
+
       setError(false);
     } catch (err: unknown) {
       setError(true);
 
       setMessage(
-        err instanceof Error
-          ? getFriendlyError(err.message)
-          : "Unable to send reset link."
+        friendlyError(
+          err instanceof Error
+            ? err.message
+            : "Unable to send reset link."
+        )
       );
     } finally {
       setLoading(false);
@@ -291,25 +385,28 @@ export default function LoginPage() {
       setMessage(
         "Password updated successfully. Redirecting..."
       );
+
       setError(false);
 
       setTimeout(() => {
-        window.location.href = "/";
+        window.location.replace("/");
       }, 900);
     } catch (err: unknown) {
       setError(true);
 
       setMessage(
-        err instanceof Error
-          ? getFriendlyError(err.message)
-          : "Unable to update password."
+        friendlyError(
+          err instanceof Error
+            ? err.message
+            : "Unable to update password."
+        )
       );
     } finally {
       setLoading(false);
     }
   }
 
-  const isBusy = loading || googleLoading;
+  const busy = loading || googleLoading;
 
   return (
     <>
@@ -323,7 +420,7 @@ export default function LoginPage() {
           margin: 0;
           padding: 0;
           min-height: 100%;
-          background: #f7f9fc;
+          background: #f4f8ff;
           font-family:
             Inter,
             ui-sans-serif,
@@ -332,6 +429,10 @@ export default function LoginPage() {
             BlinkMacSystemFont,
             "Segoe UI",
             sans-serif;
+        }
+
+        body {
+          overflow-x: hidden;
         }
 
         button,
@@ -344,7 +445,7 @@ export default function LoginPage() {
         }
 
         input::placeholder {
-          color: #9aa6b8;
+          color: #9aa8ba;
         }
 
         .auth-page {
@@ -353,73 +454,73 @@ export default function LoginPage() {
           display: flex;
           align-items: center;
           justify-content: center;
-          padding: 28px 18px;
-          overflow-x: hidden;
+          padding: 24px;
           background:
             radial-gradient(
-              circle at 12% 10%,
-              rgba(79, 70, 229, 0.08),
+              circle at 8% 8%,
+              rgba(37, 99, 235, 0.09),
               transparent 28%
             ),
             radial-gradient(
-              circle at 90% 88%,
-              rgba(37, 99, 235, 0.08),
+              circle at 92% 92%,
+              rgba(79, 70, 229, 0.08),
               transparent 30%
             ),
-            #f7f9fc;
+            #f4f8ff;
         }
 
         .auth-shell {
-          width: min(1040px, 100%);
+          width: min(1050px, 100%);
           min-height: 650px;
           display: grid;
           grid-template-columns: 1fr 430px;
-          background: rgba(255, 255, 255, 0.92);
-          border: 1px solid #e6eaf1;
-          border-radius: 30px;
           overflow: hidden;
+          border: 1px solid #e1e8f2;
+          border-radius: 28px;
+          background: #ffffff;
           box-shadow:
             0 30px 80px rgba(15, 23, 42, 0.10),
-            0 8px 25px rgba(37, 99, 235, 0.05);
+            0 10px 30px rgba(37, 99, 235, 0.06);
         }
+
+        /* LEFT */
 
         .brand-panel {
           position: relative;
           overflow: hidden;
-          padding: 52px;
           display: flex;
           flex-direction: column;
           justify-content: space-between;
+          padding: 52px;
           background:
             linear-gradient(
               145deg,
-              #f4f7ff 0%,
-              #eef3ff 52%,
-              #f9f8ff 100%
+              #edf5ff 0%,
+              #f3f6ff 55%,
+              #fafbff 100%
             );
         }
 
         .brand-panel::before {
           content: "";
           position: absolute;
-          width: 330px;
-          height: 330px;
+          width: 390px;
+          height: 390px;
           border-radius: 50%;
-          background: rgba(99, 102, 241, 0.08);
-          top: -150px;
-          right: -120px;
-          filter: blur(4px);
+          top: -210px;
+          right: -160px;
+          background: rgba(37, 99, 235, 0.07);
         }
 
         .brand-panel::after {
           content: "";
           position: absolute;
-          width: 250px;
-          height: 250px;
+          width: 300px;
+          height: 300px;
           border-radius: 50%;
-          background: rgba(37, 99, 235, 0.07);
-          bottom: -120px;
-          left: -100px;
+          bottom: -190px;
+          left: -140px;
+          background: rgba(79, 70, 229, 0.06);
         }
 
         .brand-content,
@@ -431,115 +532,109 @@ export default function LoginPage() {
         .brand-logo {
           display: flex;
           align-items: center;
-          gap: 13px;
+          gap: 12px;
         }
 
         .logo-mark {
           width: 48px;
           height: 48px;
-          border-radius: 15px;
           display: grid;
           place-items: center;
-          color: white;
+          border-radius: 15px;
+          color: #ffffff;
           font-size: 24px;
           font-weight: 900;
           background:
             linear-gradient(
               145deg,
-              #2563eb,
-              #4f46e5 58%,
-              #7c3aed
+              #1769ff,
+              #4058ed 55%,
+              #703de7
             );
           box-shadow:
-            0 12px 24px rgba(37, 99, 235, 0.22),
-            inset 0 1px 1px rgba(255, 255, 255, 0.55);
-          transform: translateY(-1px);
+            0 12px 25px rgba(37, 99, 235, 0.22),
+            inset 0 1px 1px
+              rgba(255, 255, 255, 0.55);
         }
 
         .brand-name {
+          color: #101828;
           font-size: 22px;
           font-weight: 900;
-          letter-spacing: -0.7px;
-          color: #111827;
+          letter-spacing: -0.8px;
         }
 
         .brand-tagline {
           margin-top: 2px;
-          color: #718096;
-          font-size: 11px;
-          letter-spacing: 0.4px;
+          color: #748196;
+          font-size: 10px;
+          letter-spacing: 0.3px;
         }
 
         .brand-title {
-          max-width: 470px;
-          margin: 70px 0 16px;
+          max-width: 500px;
+          margin: 78px 0 16px;
           color: #111827;
-          font-size: clamp(38px, 4vw, 58px);
-          line-height: 1.03;
-          letter-spacing: -2.8px;
+          font-size: clamp(40px, 4.2vw, 60px);
+          line-height: 1.02;
           font-weight: 900;
+          letter-spacing: -3px;
         }
 
         .brand-title span {
-          background:
-            linear-gradient(
-              90deg,
-              #2563eb,
-              #4f46e5,
-              #7c3aed
-            );
-          -webkit-background-clip: text;
-          background-clip: text;
-          color: transparent;
+          color: #2864e9;
         }
 
         .brand-description {
-          max-width: 440px;
+          max-width: 450px;
           margin: 0;
-          color: #64748b;
+          color: #66758a;
           font-size: 15px;
           line-height: 1.7;
         }
 
         .benefits {
           display: grid;
-          gap: 11px;
+          gap: 12px;
           margin-top: 34px;
-          max-width: 430px;
         }
 
         .benefit {
           display: flex;
           align-items: center;
           gap: 12px;
-          color: #334155;
+          color: #344054;
           font-size: 13px;
           font-weight: 700;
         }
 
         .benefit-icon {
-          width: 32px;
-          height: 32px;
-          border-radius: 10px;
+          width: 33px;
+          height: 33px;
           display: grid;
           place-items: center;
-          background: white;
-          border: 1px solid #e2e8f0;
-          box-shadow: 0 5px 14px rgba(15, 23, 42, 0.05);
-          font-size: 14px;
+          border: 1px solid #e0e7f0;
+          border-radius: 10px;
+          background: #ffffff;
+          color: #2563eb;
+          box-shadow:
+            0 6px 16px rgba(15, 23, 42, 0.05);
         }
 
         .brand-bottom {
-          color: #94a3b8;
+          color: #98a2b3;
           font-size: 10px;
+          line-height: 1.5;
         }
 
+        /* RIGHT */
+
         .auth-panel {
-          padding: 38px 34px;
           display: flex;
           align-items: center;
           justify-content: center;
-          background: white;
+          padding: 38px 34px;
+          background: #ffffff;
         }
 
         .auth-card {
@@ -552,44 +647,48 @@ export default function LoginPage() {
         }
 
         .auth-icon {
-          width: 54px;
-          height: 54px;
-          margin: 0 auto 15px;
-          border-radius: 17px;
+          width: 56px;
+          height: 56px;
           display: grid;
           place-items: center;
-          color: white;
-          font-size: 23px;
+          margin: 0 auto 16px;
+          border: 1px solid #dbe6ff;
+          border-radius: 17px;
+          color: #ffffff;
+          font-size: 25px;
           font-weight: 900;
           background:
             linear-gradient(
               145deg,
-              #2563eb,
-              #4f46e5,
-              #7c3aed
+              #1769ff,
+              #4058ed 55%,
+              #703de7
             );
           box-shadow:
-            0 12px 25px rgba(37, 99, 235, 0.20),
-            inset 0 1px 1px rgba(255, 255, 255, 0.5);
+            0 12px 26px rgba(37, 99, 235, 0.20),
+            inset 0 1px 1px
+              rgba(255, 255, 255, 0.55);
         }
 
         .auth-title {
           margin: 0;
+          color: #101828;
           text-align: center;
-          color: #111827;
           font-size: 27px;
           line-height: 1.15;
-          letter-spacing: -0.8px;
           font-weight: 900;
+          letter-spacing: -0.9px;
         }
 
         .auth-subtitle {
-          margin: 8px auto 23px;
+          margin: 8px auto 24px;
+          color: #667085;
           text-align: center;
-          color: #718096;
           font-size: 12px;
           line-height: 1.55;
         }
+
+        /* MESSAGE */
 
         .message {
           width: 100%;
@@ -597,20 +696,22 @@ export default function LoginPage() {
           padding: 11px 12px;
           border-radius: 12px;
           font-size: 11px;
-          line-height: 1.45;
+          line-height: 1.5;
         }
 
         .message.error {
           color: #b42318;
-          background: #fff4f2;
-          border: 1px solid #ffd2cc;
+          border: 1px solid #fecdca;
+          background: #fff5f4;
         }
 
         .message.success {
           color: #087443;
-          background: #effbf5;
-          border: 1px solid #b8efd3;
+          border: 1px solid #abefc6;
+          background: #f0fdf4;
         }
+
+        /* FIELDS */
 
         .field {
           margin-bottom: 14px;
@@ -619,19 +720,19 @@ export default function LoginPage() {
         .field-label {
           display: block;
           margin-bottom: 7px;
-          color: #334155;
+          color: #344054;
           font-size: 11px;
           font-weight: 800;
         }
 
         .input-wrap {
           width: 100%;
-          min-height: 50px;
+          min-height: 51px;
           display: flex;
           align-items: center;
-          border: 1px solid #dfe5ee;
+          border: 1px solid #dce3ed;
           border-radius: 13px;
-          background: #f9fafc;
+          background: #fafbfc;
           transition:
             border-color 0.18s ease,
             box-shadow 0.18s ease,
@@ -639,10 +740,11 @@ export default function LoginPage() {
         }
 
         .input-wrap:focus-within {
-          border-color: #7c8ff5;
-          background: #fff;
+          border-color: #7898ed;
+          background: #ffffff;
           box-shadow:
-            0 0 0 4px rgba(79, 70, 229, 0.07);
+            0 0 0 4px
+              rgba(37, 99, 235, 0.07);
         }
 
         .input-icon {
@@ -651,7 +753,7 @@ export default function LoginPage() {
           display: grid;
           place-items: center;
           color: #64748b;
-          font-size: 15px;
+          font-size: 14px;
         }
 
         .input {
@@ -660,44 +762,46 @@ export default function LoginPage() {
           border: 0;
           outline: 0;
           background: transparent;
-          color: #111827;
+          color: #101828;
           font-size: 13px;
           padding: 14px 5px 14px 0;
         }
 
         .password-toggle {
-          flex: 0 0 42px;
           width: 42px;
           height: 42px;
+          flex: 0 0 42px;
           border: 0;
           background: transparent;
-          color: #64748b;
+          color: #667085;
           cursor: pointer;
-          font-size: 15px;
+          font-size: 16px;
         }
 
         .forgot-row {
           display: flex;
           justify-content: flex-end;
-          margin: -3px 0 15px;
+          margin: -2px 0 15px;
         }
 
         .link-button {
+          padding: 2px;
           border: 0;
           background: transparent;
-          padding: 2px;
-          color: #3657d6;
+          color: #2458d7;
           font-size: 11px;
           font-weight: 800;
           cursor: pointer;
         }
+
+        /* PRIMARY */
 
         .primary-button {
           width: 100%;
           min-height: 51px;
           border: 0;
           border-radius: 13px;
-          color: white;
+          color: #ffffff;
           background:
             linear-gradient(
               100deg,
@@ -705,8 +809,10 @@ export default function LoginPage() {
               #202b40
             );
           box-shadow:
-            0 11px 22px rgba(15, 23, 42, 0.15),
-            inset 0 1px 0 rgba(255, 255, 255, 0.08);
+            0 11px 24px
+              rgba(15, 23, 42, 0.15),
+            inset 0 1px 0
+              rgba(255, 255, 255, 0.08);
           font-size: 13px;
           font-weight: 800;
           cursor: pointer;
@@ -719,7 +825,8 @@ export default function LoginPage() {
         .primary-button:hover:not(:disabled) {
           transform: translateY(-1px);
           box-shadow:
-            0 15px 28px rgba(15, 23, 42, 0.18);
+            0 15px 28px
+              rgba(15, 23, 42, 0.18);
         }
 
         .primary-button:active:not(:disabled) {
@@ -727,9 +834,11 @@ export default function LoginPage() {
         }
 
         .primary-button:disabled {
+          opacity: 0.62;
           cursor: not-allowed;
-          opacity: 0.65;
         }
+
+        /* DIVIDER */
 
         .divider {
           display: flex;
@@ -741,14 +850,16 @@ export default function LoginPage() {
         .divider-line {
           flex: 1;
           height: 1px;
-          background: #e7ebf1;
+          background: #e8edf3;
         }
 
         .divider-text {
-          color: #a0aabd;
+          color: #9aa5b5;
           font-size: 9px;
           font-weight: 800;
         }
+
+        /* GOOGLE */
 
         .google-button {
           width: 100%;
@@ -757,45 +868,49 @@ export default function LoginPage() {
           align-items: center;
           justify-content: center;
           gap: 10px;
-          border: 1px solid #dfe5ee;
+          border: 1px solid #dce3ed;
           border-radius: 13px;
-          background: white;
-          color: #1f2937;
+          background: #ffffff;
+          color: #1d2939;
           font-size: 12px;
           font-weight: 800;
           cursor: pointer;
           transition:
+            transform 0.15s ease,
             border-color 0.15s ease,
-            box-shadow 0.15s ease,
-            transform 0.15s ease;
+            box-shadow 0.15s ease;
         }
 
         .google-button:hover:not(:disabled) {
-          border-color: #cbd5e1;
-          box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
           transform: translateY(-1px);
+          border-color: #cbd5e1;
+          box-shadow:
+            0 8px 20px
+              rgba(15, 23, 42, 0.06);
         }
 
         .google-button:disabled {
-          opacity: 0.65;
+          opacity: 0.62;
           cursor: not-allowed;
         }
 
         .google-icon {
-          width: 21px;
-          height: 21px;
+          width: 22px;
+          height: 22px;
           display: grid;
           place-items: center;
+          font-family: Arial, sans-serif;
           font-size: 18px;
           font-weight: 900;
-          font-family: Arial, sans-serif;
           color: #4285f4;
         }
 
+        /* SWITCH */
+
         .switch-text {
           margin-top: 19px;
+          color: #667085;
           text-align: center;
-          color: #718096;
           font-size: 11px;
         }
 
@@ -804,15 +919,17 @@ export default function LoginPage() {
           padding: 0;
           border: 0;
           background: transparent;
-          color: #3657d6;
+          color: #2458d7;
           font-size: 11px;
           font-weight: 800;
           cursor: pointer;
         }
 
+        /* LEGAL */
+
         .legal {
-          margin-top: 20px;
-          color: #9aa6b8;
+          margin-top: 19px;
+          color: #98a2b3;
           text-align: center;
           font-size: 9px;
           line-height: 1.6;
@@ -824,17 +941,21 @@ export default function LoginPage() {
           font-weight: 700;
         }
 
+        /* SECURITY */
+
         .security {
           display: flex;
-          justify-content: center;
           align-items: center;
+          justify-content: center;
           gap: 8px;
           margin-top: 15px;
           padding-top: 14px;
           border-top: 1px solid #eef1f5;
-          color: #9aa6b8;
+          color: #98a2b3;
           font-size: 9px;
         }
+
+        /* BACK */
 
         .back-button {
           display: inline-flex;
@@ -844,11 +965,13 @@ export default function LoginPage() {
           padding: 0;
           border: 0;
           background: transparent;
-          color: #64748b;
+          color: #667085;
           font-size: 11px;
           font-weight: 700;
           cursor: pointer;
         }
+
+        /* MOBILE */
 
         @media (max-width: 820px) {
           .auth-page {
@@ -858,8 +981,9 @@ export default function LoginPage() {
 
           .auth-shell {
             display: block;
-            min-height: auto;
+            width: 100%;
             max-width: 500px;
+            min-height: calc(100svh - 28px);
             border-radius: 24px;
           }
 
@@ -869,8 +993,7 @@ export default function LoginPage() {
 
           .auth-panel {
             min-height: calc(100svh - 28px);
-            padding: 25px 18px 22px;
-            align-items: center;
+            padding: 26px 19px 24px;
           }
 
           .mobile-brand {
@@ -882,15 +1005,15 @@ export default function LoginPage() {
           }
 
           .mobile-brand .logo-mark {
-            width: 39px;
-            height: 39px;
+            width: 40px;
+            height: 40px;
             border-radius: 12px;
-            font-size: 19px;
+            font-size: 20px;
           }
 
           .mobile-brand-name {
-            color: #111827;
-            font-size: 18px;
+            color: #101828;
+            font-size: 19px;
             font-weight: 900;
             letter-spacing: -0.5px;
           }
@@ -906,7 +1029,6 @@ export default function LoginPage() {
           }
 
           .auth-shell {
-            width: 100%;
             min-height: 100svh;
             border: 0;
             border-radius: 0;
@@ -927,11 +1049,17 @@ export default function LoginPage() {
       <main className="auth-page">
         <div className="auth-shell">
 
-          {/* DESKTOP BRAND PANEL */}
+          {/* =========================
+              DESKTOP BRAND
+          ========================== */}
+
           <section className="brand-panel">
             <div className="brand-content">
+
               <div className="brand-logo">
-                <div className="logo-mark">A</div>
+                <div className="logo-mark">
+                  A
+                </div>
 
                 <div>
                   <div className="brand-name">
@@ -952,25 +1080,33 @@ export default function LoginPage() {
 
               <p className="brand-description">
                 Discover offers, complete simple tasks,
-                earn rewards and withdraw your earnings
-                directly from AURACAMP.
+                earn rewards and manage your earnings
+                from one place.
               </p>
 
               <div className="benefits">
+
                 <div className="benefit">
-                  <div className="benefit-icon">✓</div>
+                  <div className="benefit-icon">
+                    ✓
+                  </div>
                   Secure account authentication
                 </div>
 
                 <div className="benefit">
-                  <div className="benefit-icon">⚡</div>
+                  <div className="benefit-icon">
+                    ⚡
+                  </div>
                   Fast and simple earning experience
                 </div>
 
                 <div className="benefit">
-                  <div className="benefit-icon">₹</div>
+                  <div className="benefit-icon">
+                    ₹
+                  </div>
                   Transparent rewards and withdrawals
                 </div>
+
               </div>
             </div>
 
@@ -981,36 +1117,47 @@ export default function LoginPage() {
             </div>
           </section>
 
-          {/* AUTH PANEL */}
+          {/* =========================
+              AUTH
+          ========================== */}
+
           <section className="auth-panel">
             <div className="auth-card">
 
               {/* MOBILE BRAND */}
+
               <div className="mobile-brand">
-                <div className="logo-mark">A</div>
+                <div className="logo-mark">
+                  A
+                </div>
 
                 <div className="mobile-brand-name">
                   AURACAMP
                 </div>
               </div>
 
-              {/* FORGOT PASSWORD */}
+              {/* =========================
+                  FORGOT PASSWORD
+              ========================== */}
+
               {mode === "forgot" && (
                 <>
                   <button
                     className="back-button"
                     type="button"
-                    onClick={() => switchMode("login")}
+                    onClick={() =>
+                      switchMode("login")
+                    }
                   >
                     ← Back to Login
                   </button>
 
                   <div className="auth-icon">
-                    🔐
+                    A
                   </div>
 
                   <h1 className="auth-title">
-                    Reset Password
+                    Forgot Password?
                   </h1>
 
                   <p className="auth-subtitle">
@@ -1021,14 +1168,18 @@ export default function LoginPage() {
                   {message && (
                     <div
                       className={`message ${
-                        error ? "error" : "success"
+                        error
+                          ? "error"
+                          : "success"
                       }`}
                     >
                       {message}
                     </div>
                   )}
 
-                  <form onSubmit={sendResetEmail}>
+                  <form
+                    onSubmit={sendResetEmail}
+                  >
                     <div className="field">
                       <label className="field-label">
                         Email Address
@@ -1036,7 +1187,7 @@ export default function LoginPage() {
 
                       <div className="input-wrap">
                         <span className="input-icon">
-                          ✉
+                          @
                         </span>
 
                         <input
@@ -1044,11 +1195,13 @@ export default function LoginPage() {
                           type="email"
                           value={email}
                           onChange={(e) =>
-                            setEmail(e.target.value)
+                            setEmail(
+                              e.target.value
+                            )
                           }
                           placeholder="Enter your email"
                           autoComplete="email"
-                          disabled={isBusy}
+                          disabled={busy}
                         />
                       </div>
                     </div>
@@ -1056,25 +1209,28 @@ export default function LoginPage() {
                     <button
                       className="primary-button"
                       type="submit"
-                      disabled={isBusy}
+                      disabled={busy}
                     >
                       {loading
                         ? "Sending..."
-                        : "Send Reset Link"}
+                        : "Send Reset Link →"}
                     </button>
                   </form>
 
                   <div className="security">
-                    🔒 Secure password recovery
+                    Secure password recovery
                   </div>
                 </>
               )}
 
-              {/* RESET PASSWORD */}
+              {/* =========================
+                  RESET PASSWORD
+              ========================== */}
+
               {mode === "reset" && (
                 <>
                   <div className="auth-icon">
-                    🔑
+                    A
                   </div>
 
                   <h1 className="auth-title">
@@ -1082,21 +1238,26 @@ export default function LoginPage() {
                   </h1>
 
                   <p className="auth-subtitle">
-                    Choose a strong new password for
-                    your AURACAMP account.
+                    Choose a strong new password
+                    for your AURACAMP account.
                   </p>
 
                   {message && (
                     <div
                       className={`message ${
-                        error ? "error" : "success"
+                        error
+                          ? "error"
+                          : "success"
                       }`}
                     >
                       {message}
                     </div>
                   )}
 
-                  <form onSubmit={updatePassword}>
+                  <form
+                    onSubmit={updatePassword}
+                  >
+
                     <div className="field">
                       <label className="field-label">
                         New Password
@@ -1104,7 +1265,7 @@ export default function LoginPage() {
 
                       <div className="input-wrap">
                         <span className="input-icon">
-                          🔒
+                          •
                         </span>
 
                         <input
@@ -1116,11 +1277,13 @@ export default function LoginPage() {
                           }
                           value={password}
                           onChange={(e) =>
-                            setPassword(e.target.value)
+                            setPassword(
+                              e.target.value
+                            )
                           }
                           placeholder="Enter new password"
                           autoComplete="new-password"
-                          disabled={isBusy}
+                          disabled={busy}
                         />
 
                         <button
@@ -1131,14 +1294,11 @@ export default function LoginPage() {
                               !showPassword
                             )
                           }
-                          disabled={isBusy}
-                          aria-label={
-                            showPassword
-                              ? "Hide password"
-                              : "Show password"
-                          }
+                          disabled={busy}
                         >
-                          {showPassword ? "◉" : "◌"}
+                          {showPassword
+                            ? "●"
+                            : "○"}
                         </button>
                       </div>
                     </div>
@@ -1150,7 +1310,7 @@ export default function LoginPage() {
 
                       <div className="input-wrap">
                         <span className="input-icon">
-                          🔐
+                          •
                         </span>
 
                         <input
@@ -1160,7 +1320,9 @@ export default function LoginPage() {
                               ? "text"
                               : "password"
                           }
-                          value={confirmPassword}
+                          value={
+                            confirmPassword
+                          }
                           onChange={(e) =>
                             setConfirmPassword(
                               e.target.value
@@ -1168,7 +1330,7 @@ export default function LoginPage() {
                           }
                           placeholder="Confirm new password"
                           autoComplete="new-password"
-                          disabled={isBusy}
+                          disabled={busy}
                         />
 
                         <button
@@ -1179,14 +1341,11 @@ export default function LoginPage() {
                               !showConfirmPassword
                             )
                           }
-                          disabled={isBusy}
-                          aria-label={
-                            showConfirmPassword
-                              ? "Hide password"
-                              : "Show password"
-                          }
+                          disabled={busy}
                         >
-                          {showConfirmPassword ? "◉" : "◌"}
+                          {showConfirmPassword
+                            ? "●"
+                            : "○"}
                         </button>
                       </div>
                     </div>
@@ -1194,26 +1353,29 @@ export default function LoginPage() {
                     <button
                       className="primary-button"
                       type="submit"
-                      disabled={isBusy}
+                      disabled={busy}
                     >
                       {loading
                         ? "Updating..."
-                        : "Update Password"}
+                        : "Update Password →"}
                     </button>
                   </form>
 
                   <div className="security">
-                    🔒 Your password stays private
+                    Your password stays private
                   </div>
                 </>
               )}
 
-              {/* LOGIN / REGISTER */}
+              {/* =========================
+                  LOGIN / REGISTER
+              ========================== */}
+
               {(mode === "login" ||
                 mode === "register") && (
                 <>
                   <div className="auth-icon">
-                    {mode === "register" ? "A" : "A"}
+                    A
                   </div>
 
                   <h1 className="auth-title">
@@ -1231,7 +1393,9 @@ export default function LoginPage() {
                   {message && (
                     <div
                       className={`message ${
-                        error ? "error" : "success"
+                        error
+                          ? "error"
+                          : "success"
                       }`}
                     >
                       {message}
@@ -1240,7 +1404,8 @@ export default function LoginPage() {
 
                   <form onSubmit={submit}>
 
-                    {/* FULL NAME */}
+                    {/* NAME */}
+
                     {mode === "register" && (
                       <div className="field">
                         <label className="field-label">
@@ -1249,7 +1414,7 @@ export default function LoginPage() {
 
                         <div className="input-wrap">
                           <span className="input-icon">
-                            👤
+                            •
                           </span>
 
                           <input
@@ -1257,17 +1422,20 @@ export default function LoginPage() {
                             type="text"
                             value={name}
                             onChange={(e) =>
-                              setName(e.target.value)
+                              setName(
+                                e.target.value
+                              )
                             }
                             placeholder="Enter your full name"
                             autoComplete="name"
-                            disabled={isBusy}
+                            disabled={busy}
                           />
                         </div>
                       </div>
                     )}
 
                     {/* EMAIL */}
+
                     <div className="field">
                       <label className="field-label">
                         Email Address
@@ -1275,7 +1443,7 @@ export default function LoginPage() {
 
                       <div className="input-wrap">
                         <span className="input-icon">
-                          ✉
+                          @
                         </span>
 
                         <input
@@ -1283,16 +1451,19 @@ export default function LoginPage() {
                           type="email"
                           value={email}
                           onChange={(e) =>
-                            setEmail(e.target.value)
+                            setEmail(
+                              e.target.value
+                            )
                           }
                           placeholder="Enter your email"
                           autoComplete="email"
-                          disabled={isBusy}
+                          disabled={busy}
                         />
                       </div>
                     </div>
 
                     {/* PASSWORD */}
+
                     <div className="field">
                       <label className="field-label">
                         Password
@@ -1300,7 +1471,7 @@ export default function LoginPage() {
 
                       <div className="input-wrap">
                         <span className="input-icon">
-                          🔒
+                          •
                         </span>
 
                         <input
@@ -1312,7 +1483,9 @@ export default function LoginPage() {
                           }
                           value={password}
                           onChange={(e) =>
-                            setPassword(e.target.value)
+                            setPassword(
+                              e.target.value
+                            )
                           }
                           placeholder="Enter your password"
                           autoComplete={
@@ -1320,7 +1493,7 @@ export default function LoginPage() {
                               ? "new-password"
                               : "current-password"
                           }
-                          disabled={isBusy}
+                          disabled={busy}
                         />
 
                         <button
@@ -1331,19 +1504,22 @@ export default function LoginPage() {
                               !showPassword
                             )
                           }
-                          disabled={isBusy}
+                          disabled={busy}
                           aria-label={
                             showPassword
                               ? "Hide password"
                               : "Show password"
                           }
                         >
-                          {showPassword ? "◉" : "◌"}
+                          {showPassword
+                            ? "●"
+                            : "○"}
                         </button>
                       </div>
                     </div>
 
                     {/* CONFIRM PASSWORD */}
+
                     {mode === "register" && (
                       <div className="field">
                         <label className="field-label">
@@ -1352,7 +1528,7 @@ export default function LoginPage() {
 
                         <div className="input-wrap">
                           <span className="input-icon">
-                            🔐
+                            •
                           </span>
 
                           <input
@@ -1362,7 +1538,9 @@ export default function LoginPage() {
                                 ? "text"
                                 : "password"
                             }
-                            value={confirmPassword}
+                            value={
+                              confirmPassword
+                            }
                             onChange={(e) =>
                               setConfirmPassword(
                                 e.target.value
@@ -1370,7 +1548,7 @@ export default function LoginPage() {
                             }
                             placeholder="Confirm your password"
                             autoComplete="new-password"
-                            disabled={isBusy}
+                            disabled={busy}
                           />
 
                           <button
@@ -1381,65 +1559,69 @@ export default function LoginPage() {
                                 !showConfirmPassword
                               )
                             }
-                            disabled={isBusy}
-                            aria-label={
-                              showConfirmPassword
-                                ? "Hide password"
-                                : "Show password"
-                            }
+                            disabled={busy}
                           >
                             {showConfirmPassword
-                              ? "◉"
-                              : "◌"}
+                              ? "●"
+                              : "○"}
                           </button>
                         </div>
                       </div>
                     )}
 
-                    {/* FORGOT PASSWORD */}
+                    {/* FORGOT */}
+
                     {mode === "login" && (
                       <div className="forgot-row">
                         <button
                           type="button"
                           className="link-button"
                           onClick={() =>
-                            switchMode("forgot")
+                            switchMode(
+                              "forgot"
+                            )
                           }
-                          disabled={isBusy}
+                          disabled={busy}
                         >
                           Forgot Password?
                         </button>
                       </div>
                     )}
 
-                    {/* MAIN BUTTON */}
+                    {/* SUBMIT */}
+
                     <button
                       className="primary-button"
                       type="submit"
-                      disabled={isBusy}
+                      disabled={busy}
                     >
                       {loading
                         ? "Please wait..."
                         : mode === "register"
-                        ? "Create Account  →"
-                        : "Login  →"}
+                        ? "Create Account →"
+                        : "Login →"}
                     </button>
                   </form>
 
-                  {/* GOOGLE */}
+                  {/* DIVIDER */}
+
                   <div className="divider">
                     <div className="divider-line" />
+
                     <span className="divider-text">
                       OR
                     </span>
+
                     <div className="divider-line" />
                   </div>
+
+                  {/* GOOGLE */}
 
                   <button
                     className="google-button"
                     type="button"
                     onClick={googleLogin}
-                    disabled={isBusy}
+                    disabled={busy}
                   >
                     <span className="google-icon">
                       G
@@ -1451,6 +1633,7 @@ export default function LoginPage() {
                   </button>
 
                   {/* SWITCH */}
+
                   <div className="switch-text">
                     {mode === "register"
                       ? "Already have an account?"
@@ -1465,7 +1648,7 @@ export default function LoginPage() {
                             : "register"
                         )
                       }
-                      disabled={isBusy}
+                      disabled={busy}
                     >
                       {mode === "register"
                         ? "Login"
@@ -1473,7 +1656,8 @@ export default function LoginPage() {
                     </button>
                   </div>
 
-                  {/* LEGAL */}
+                  {/* TERMS */}
+
                   <div className="legal">
                     By continuing, you agree to our{" "}
                     <a href="/terms">
@@ -1486,10 +1670,12 @@ export default function LoginPage() {
                     .
                   </div>
 
+                  {/* SECURITY */}
+
                   <div className="security">
-                    🔒 Secure Login
+                    Secure Login
                     <span>•</span>
-                    ⚡ Fast & Easy
+                    Fast & Easy
                   </div>
                 </>
               )}
@@ -1499,37 +1685,4 @@ export default function LoginPage() {
       </main>
     </>
   );
-}
-
-function getFriendlyError(message: string) {
-  const text = message.toLowerCase();
-
-  if (
-    text.includes("invalid login credentials") ||
-    text.includes("invalid credentials")
-  ) {
-    return "Incorrect email or password.";
-  }
-
-  if (text.includes("user already registered")) {
-    return "An account with this email already exists. Please login.";
-  }
-
-  if (text.includes("email not confirmed")) {
-    return "Please verify your email before logging in.";
-  }
-
-  if (text.includes("password should be at least")) {
-    return "Password must contain at least 6 characters.";
-  }
-
-  if (text.includes("rate limit")) {
-    return "Too many attempts. Please wait a moment and try again.";
-  }
-
-  if (text.includes("network")) {
-    return "Network error. Please check your internet connection.";
-  }
-
-  return message;
 }
