@@ -3,14 +3,24 @@ import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SECRET_KEY!
+  process.env.SUPABASE_SECRET_KEY!,
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  }
 );
 
 export async function POST(request: NextRequest) {
   try {
     const secret = request.headers.get("x-postback-secret");
 
-    if (!secret || secret !== process.env.AURACAMP_POSTBACK_SECRET) {
+    if (
+      !secret ||
+      secret !== process.env.AURACAMP_POSTBACK_SECRET
+    ) {
       return NextResponse.json(
         {
           success: false,
@@ -40,12 +50,14 @@ export async function POST(request: NextRequest) {
       {
         p_conversion_id: String(conversionId),
         p_click_id: String(clickId),
-        p_reward: 0,
       }
     );
 
     if (error) {
-      console.error("Postback conversion error:", error);
+      console.error(
+        "Postback conversion error:",
+        error
+      );
 
       return NextResponse.json(
         {
@@ -57,6 +69,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(data);
+
   } catch (error) {
     console.error("Postback error:", error);
 
