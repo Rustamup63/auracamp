@@ -578,11 +578,54 @@ export default function Home() {
                       <button
                         className="startButton"
                         style={styles.startButton}
-                        onClick={() => {
-                          alert(
-                            "Offer tracking system is being connected next."
-                          );
-                        }}
+                        onClick={async () => {
+  try {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      window.location.href = "/login";
+      return;
+    }
+
+    if (!campaign.landing_url) {
+      alert("This offer is temporarily unavailable.");
+      return;
+    }
+
+    const clickId = crypto.randomUUID();
+
+    const { error } = await supabase
+      .from("clicks")
+      .insert({
+        user_id: user.id,
+        campaign_id: campaign.id,
+        click_id: clickId,
+        status: "clicked",
+        user_agent: navigator.userAgent,
+      });
+
+    if (error) {
+      console.error("Click tracking error:", error);
+      alert("Unable to start this offer. Please try again.");
+      return;
+    }
+
+    const separator = campaign.landing_url.includes("?")
+      ? "&"
+      : "?";
+
+    const trackingUrl =
+      `${campaign.landing_url}${separator}` +
+      `click_id=${encodeURIComponent(clickId)}`;
+
+    window.location.href = trackingUrl;
+  } catch (error) {
+    console.error("Start offer error:", error);
+    alert("Something went wrong. Please try again.");
+  }
+}}
                       >
                         Start Offer
                         <span>→</span>
