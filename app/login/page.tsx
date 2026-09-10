@@ -144,25 +144,26 @@ export default function LoginPage() {
   }
 
   return (
-    <main>
-      style={{
-        minHeight: "100svh",
+  <main
+    style={{
+      minHeight: "100svh",
+      width: "100%",
       maxWidth: "100%",
-boxSizing: "border-box",
+      boxSizing: "border-box",
+      overflowX: "hidden",
+      background:
+        "linear-gradient(135deg,#eef4ff,#f8f5ff,#fff8f1)",
+      padding: "20px 12px",
+    }}
+  >
+    <div
+      style={{
         width: "100%",
-        overflowX: "hidden",
-        background:
-          "linear-gradient(135deg,#eef4ff,#f8f5ff,#fff8f1)",
-        padding: "20px 12px",
+        maxWidth: "420px",
+        boxSizing: "border-box",
+        margin: "0 auto",
       }}
-    >      </div>
-        style={{
-          width: "100%",
-          maxWidth: "420px",
-    boxSizing: "border-box",
-          margin: "0 auto",
-        }}
-      >
+    >
 
         {/* LOGO */}
 
