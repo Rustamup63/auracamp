@@ -607,9 +607,13 @@ export default function Home() {
       });
 
     if (error) {
-      console.error("Click tracking error:", error);
-      alert("Unable to start this offer. Please try again.");
-      return;
+  console.error("Click tracking error:", error);
+
+  alert(
+    `Click tracking error: ${error.message}`
+  );
+
+  return;
     }
 
     const separator = campaign.landing_url.includes("?")
