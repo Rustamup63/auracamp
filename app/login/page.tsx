@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+import type { CSSProperties } from "react";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -13,449 +14,730 @@ const supabase = createClient(
   }
 );
 
+type Mode = "login" | "register";
+
 export default function LoginPage() {
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [name, setName] = useState("");
+  const [mode, setMode] = useState<Mode>("login");
+
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
+  const [confirmPassword, setConfirmPassword] =
+    useState("");
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] =
+    useState(false);
+  const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState<
+    "success" | "error" | ""
+  >("");
+
+  async function handleSubmit(
+    event: React.FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault();
+
     setMessage("");
+    setMessageType("");
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (!cleanEmail || !password) {
+      setMessage("Please enter your email and password.");
+      setMessageType("error");
+      return;
+    }
+
+    if (password.length < 6) {
+      setMessage(
+        "Password must be at least 6 characters."
+      );
+      setMessageType("error");
+      return;
+    }
+
+    if (mode === "register") {
+      if (!fullName.trim()) {
+        setMessage("Please enter your full name.");
+        setMessageType("error");
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        setMessage("Passwords do not match.");
+        setMessageType("error");
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {
       if (mode === "register") {
-        if (!name.trim()) {
-          setMessage("Please enter your name.");
-          setLoading(false);
-          return;
-        }
-
-        if (password.length < 6) {
-          setMessage("Password must be at least 6 characters.");
-          setLoading(false);
-          return;
-        }
-
-        if (password !== confirmPassword) {
-          setMessage("Passwords do not match.");
-          setLoading(false);
-          return;
-        }
-
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              full_name: name,
+        const { data, error } =
+          await supabase.auth.signUp({
+            email: cleanEmail,
+            password,
+            options: {
+              data: {
+                full_name: fullName.trim(),
+              },
+              emailRedirectTo:
+                `${window.location.origin}/auth/callback`,
             },
-          },
-        });
+          });
 
         if (error) {
-          setMessage(error.message);
-        } else {
-          setMessage(
-            "Account created. Check your email to confirm your account."
-          );
+          throw error;
         }
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
 
-        if (error) {
-          setMessage(error.message);
-        } else {
+        if (data.session) {
           window.location.href = "/";
+          return;
         }
+
+        setMessage(
+          "Account created. Please check your email to verify your account."
+        );
+        setMessageType("success");
+      } else {
+        const { error } =
+          await supabase.auth.signInWithPassword({
+            email: cleanEmail,
+            password,
+          });
+
+        if (error) {
+          throw error;
+        }
+
+        window.location.href = "/";
+        return;
       }
-    } catch {
-      setMessage("Something went wrong. Please try again.");
-    }
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Something went wrong. Please try again.";
 
-    setLoading(false);
-  }
-
-  async function handleGoogleLogin() {
-    setMessage("");
-    setLoading(true);
-
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
-
-    if (error) {
-      setMessage(error.message);
+      setMessage(errorMessage);
+      setMessageType("error");
+    } finally {
       setLoading(false);
     }
   }
 
-  const isLogin = mode === "login";
+  async function handleGoogleLogin() {
+    setMessage("");
+    setMessageType("");
+    setGoogleLoading(true);
+
+    try {
+      const { error } =
+        await supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo:
+              `${window.location.origin}/auth/callback`,
+          },
+        });
+
+      if (error) {
+        throw error;
+      }
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Google login failed. Please try again.";
+
+      setMessage(errorMessage);
+      setMessageType("error");
+      setGoogleLoading(false);
+    }
+  }
+
+  function switchMode() {
+    setMessage("");
+    setMessageType("");
+
+    setMode(
+      mode === "login"
+        ? "register"
+        : "login"
+    );
+
+    setPassword("");
+    setConfirmPassword("");
+  }
+
+  const isRegister = mode === "register";
 
   return (
     <main style={styles.page}>
-      <style>{globalStyles}</style>
 
-      <div style={styles.glowOne} />
+            <div style={styles.glowOne} />
       <div style={styles.glowTwo} />
 
-      <section style={styles.authCard} className="authCard">
-        {/* Logo */}
-        <div style={styles.brandArea}>
+      <section style={styles.shell}>
+
+        {/* LOGO */}
+
+        <div style={styles.logoArea}>
           <div style={styles.logo}>
-            <span style={styles.logoAura}>AURA</span>
-            <span style={styles.logoCamp}>CAMP</span>
+            <span>AURA</span>{" "}
+            <b>CAMP</b>
           </div>
 
-          <div style={styles.tagline}>Earn • Explore • Grow</div>
+          <div style={styles.logoTagline}>
+            Earn • Explore • Grow
+          </div>
         </div>
 
-        {/* Icon */}
-        <div style={styles.topIcon} className="topIcon">
-          {isLogin ? "👋" : "🚀"}
-        </div>
+        {/* CARD */}
 
-        {/* Heading */}
-        <div style={styles.headingArea}>
+        <div
+          className="authCard"
+          style={styles.card}
+        >
+          {/* TOP ICON */}
+
+          <div
+            className="topIcon"
+            style={styles.topIcon}
+          >
+            {isRegister ? "🚀" : "👋"}
+          </div>
+
           <h1 style={styles.title}>
-            {isLogin ? "Welcome Back" : "Create Account"}
+            {isRegister
+              ? "Create Account"
+              : "Welcome Back"}
           </h1>
 
           <p style={styles.subtitle}>
-            {isLogin
-              ? "Login to continue earning rewards"
-              : "Join AURACAMP and start earning rewards"}
+            {isRegister
+              ? "Join AURA CAMP and start earning rewards."
+              : "Login to continue your earning journey."}
           </p>
-        </div>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit}>
-          {!isLogin && (
-            <div style={styles.fieldGroup} className="fieldAnimation">
-              <label style={styles.label}>Full Name</label>
+          {/* MESSAGE */}
 
-              <div style={styles.inputWrap}>
-                <span style={styles.inputIcon}>👤</span>
+          {message && (
+            <div
+              style={{
+                ...styles.message,
+                ...(messageType === "success"
+                  ? styles.successMessage
+                  : styles.errorMessage),
+              }}
+            >
+              <span>
+                {messageType === "success"
+                  ? "✓"
+                  : "!"}
+              </span>
 
-                <input
-                  type="text"
-                  placeholder="Enter your name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  style={styles.input}
-                  required
-                />
-              </div>
+              <span>{message}</span>
             </div>
           )}
 
-          <div style={styles.fieldGroup} className="fieldAnimation">
-            <label style={styles.label}>Email Address</label>
+          {/* FORM */}
 
-            <div style={styles.inputWrap}>
-              <span style={styles.inputIcon}>✉️</span>
+          <form
+            onSubmit={handleSubmit}
+            style={styles.form}
+          >
 
-              <input
-                type="email"
-                placeholder="Enter your email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                style={styles.input}
-                required
-              />
-            </div>
-          </div>
+            {/* FULL NAME */}
 
-          <div style={styles.fieldGroup} className="fieldAnimation">
-            <label style={styles.label}>Password</label>
+            {isRegister && (
+              <div style={styles.field}>
+                <label style={styles.label}>
+                  Full Name
+                </label>
 
-            <div style={styles.inputWrap}>
-              <span style={styles.inputIcon}>🔒</span>
+                <div style={styles.inputWrap}>
+                  <span style={styles.inputIcon}>
+                    👤
+                  </span>
 
-              <input
-                type="password"
-                placeholder="Enter your password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                style={styles.input}
-                required
-              />
-            </div>
-          </div>
+                  <input
+                    type="text"
+                    value={fullName}
+                    onChange={(e) =>
+                      setFullName(e.target.value)
+                    }
+                    placeholder="Enter your full name"
+                    autoComplete="name"
+                    style={styles.input}
+                    disabled={loading}
+                  />
+                </div>
+              </div>
+            )}
 
-          {!isLogin && (
-            <div style={styles.fieldGroup} className="fieldAnimation">
-              <label style={styles.label}>Confirm Password</label>
+            {/* EMAIL */}
+
+            <div style={styles.field}>
+              <label style={styles.label}>
+                Email Address
+              </label>
 
               <div style={styles.inputWrap}>
-                <span style={styles.inputIcon}>🔐</span>
+                <span style={styles.inputIcon}>
+                  ✉️
+                </span>
+
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) =>
+                    setEmail(e.target.value)
+                  }
+                  placeholder="Enter your email"
+                  autoComplete="email"
+                  style={styles.input}
+                  disabled={loading}
+                />
+              </div>
+            </div>
+
+            {/* PASSWORD */}
+
+            <div style={styles.field}>
+              <label style={styles.label}>
+                Password
+              </label>
+
+              <div style={styles.inputWrap}>
+                <span style={styles.inputIcon}>
+                  🔒
+                </span>
 
                 <input
                   type="password"
-                  placeholder="Confirm your password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  value={password}
+                  onChange={(e) =>
+                    setPassword(e.target.value)
+                  }
+                  placeholder="Enter your password"
+                  autoComplete={
+                    isRegister
+                      ? "new-password"
+                      : "current-password"
+                  }
                   style={styles.input}
-                  required
+                  disabled={loading}
                 />
               </div>
             </div>
-          )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            style={{
-              ...styles.primaryButton,
-              opacity: loading ? 0.75 : 1,
-            }}
-            className="primaryButton"
-          >
-            {loading ? (
-              <>
-                <span style={styles.spinner} className="spinner" />
-                Please wait...
-              </>
-            ) : (
-              <>
-                {isLogin ? "Login to AURACAMP" : "Create My Account"}
-                <span style={styles.arrow}>→</span>
-              </>
+            {/* CONFIRM PASSWORD */}
+
+            {isRegister && (
+              <div style={styles.field}>
+                <label style={styles.label}>
+                  Confirm Password
+                </label>
+
+                <div style={styles.inputWrap}>
+                  <span style={styles.inputIcon}>
+                    🔐
+                  </span>
+
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) =>
+                      setConfirmPassword(
+                        e.target.value
+                      )
+                    }
+                    placeholder="Confirm your password"
+                    autoComplete="new-password"
+                    style={styles.input}
+                    disabled={loading}
+                  />
+                </div>
+              </div>
             )}
-          </button>
-        </form>
 
-        {/* Divider */}
-        <div style={styles.divider}>
-          <span style={styles.line} />
-          <span style={styles.orText}>OR</span>
-          <span style={styles.line} />
-        </div>
+            {/* LOGIN BUTTON */}
 
-        {/* Google */}
-        <button
-          onClick={handleGoogleLogin}
-          disabled={loading}
-          style={styles.googleButton}
-          className="googleButton"
-        >
-          <span style={styles.googleIcon}>G</span>
-          <span>Continue with Google</span>
-        </button>
+            <button
+              type="submit"
+              className="primaryButton"
+              style={styles.primaryButton}
+              disabled={
+                loading || googleLoading
+              }
+            >
+              {loading ? (
+                <>
+                  <span
+                    style={styles.buttonSpinner}
+                  />
+                  {isRegister
+                    ? "Creating Account..."
+                    : "Signing In..."}
+                </>
+              ) : (
+                <>
+                  {isRegister
+                    ? "Create Account"
+                    : "Login"}
+                  <span style={styles.buttonArrow}>
+                    →
+                  </span>
+                </>
+              )}
+            </button>
+          </form>
 
-        {/* Message */}
-        {message && (
-          <div style={styles.messageBox}>
-            {message}
+          {/* DIVIDER */}
+
+          <div style={styles.divider}>
+            <span style={styles.dividerLine} />
+            <span style={styles.dividerText}>
+              OR
+            </span>
+            <span style={styles.dividerLine} />
           </div>
-        )}
 
-        {/* Switch */}
-        <div style={styles.switchArea}>
-          <span style={styles.switchText}>
-            {isLogin
-              ? "Don't have an account?"
-              : "Already have an account?"}
-          </span>
+          {/* GOOGLE */}
 
           <button
             type="button"
-            onClick={() => {
-              setMode(isLogin ? "register" : "login");
-              setMessage("");
-            }}
-            style={styles.switchButton}
-            className="switchButton"
+            className="googleButton"
+            style={styles.googleButton}
+            onClick={handleGoogleLogin}
+            disabled={
+              loading || googleLoading
+            }
           >
-            {isLogin ? "Create Account" : "Login"}
+            {googleLoading ? (
+              <>
+                <span
+                  style={{
+                    ...styles.buttonSpinner,
+                    borderTopColor: "#4285F4",
+                    borderRightColor: "#34A853",
+                  }}
+                />
+                Connecting...
+              </>
+            ) : (
+              <>
+                <span style={styles.googleIcon}>
+                  G
+                </span>
+
+                <span>
+                  Continue with Google
+                </span>
+              </>
+            )}
           </button>
+
+          {/* SWITCH MODE */}
+
+          <div style={styles.switchArea}>
+            <span style={styles.switchText}>
+              {isRegister
+                ? "Already have an account?"
+                : "Don't have an account?"}
+            </span>
+
+            <button
+              type="button"
+              className="switchButton"
+              style={styles.switchButton}
+              onClick={switchMode}
+              disabled={
+                loading || googleLoading
+              }
+            >
+              {isRegister
+                ? "Login"
+                : "Create Account"}
+            </button>
+          </div>
+
+          {/* TRUST */}
+
+          <div style={styles.trustRow}>
+            <div style={styles.trustItem}>
+              <span>🔒</span>
+              <span>Secure Login</span>
+            </div>
+
+            <div style={styles.trustDot}>
+              •
+            </div>
+
+            <div style={styles.trustItem}>
+              <span>⚡</span>
+              <span>Fast & Easy</span>
+            </div>
+          </div>
         </div>
 
-        {/* Trust */}
-        <div style={styles.trustRow}>
-          <span>🔒 Secure</span>
-          <span>•</span>
-          <span>⚡ Fast</span>
-          <span>•</span>
-          <span>🛡️ Protected</span>
+        {/* FOOTER */}
+
+        <div style={styles.footer}>
+          <span>
+            © {new Date().getFullYear()} AURA CAMP
+          </span>
+
+          <span>
+            Independent Rewards Platform
+          </span>
         </div>
       </section>
-
-      <footer style={styles.footer}>
-        © {new Date().getFullYear()} AURACAMP • Independent Rewards Platform
-      </footer>
     </main>
   );
 }
 
+/* =====================================================
+   GLOBAL CSS
+===================================================== */
+
 const globalStyles = `
-  * {
-    box-sizing: border-box;
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100%;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+button,
+input {
+  font-family: inherit;
+}
+
+input::placeholder {
+  color: #94a3b8;
+}
+
+input:focus {
+  outline: none;
+}
+
+.primaryButton,
+.googleButton,
+.switchButton {
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.primaryButton:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow:
+    0 14px 30px rgba(37, 99, 235, 0.30);
+}
+
+.googleButton:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow:
+    0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.switchButton:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.primaryButton:active:not(:disabled),
+.googleButton:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.primaryButton:disabled,
+.googleButton:disabled,
+.switchButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.inputWrap:focus-within {
+  border-color: #6366f1 !important;
+  box-shadow:
+    0 0 0 4px rgba(99, 102, 241, 0.09);
+}
+
+.authCard {
+  animation: cardIn 0.65s ease both;
+}
+
+.topIcon {
+  animation: iconFloat 3s ease-in-out infinite;
+}
+
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.98);
   }
 
-  html,
-  body {
-    margin: 0;
-    padding: 0;
-    overflow-x: hidden;
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes iconFloat {
+  0%,
+  100% {
+    transform: translateY(0);
   }
 
-  button,
-  input {
-    font-family: inherit;
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 520px) {
+
+  .page {
+    min-height: 100svh !important;
+    padding:
+      22px 12px 18px !important;
   }
 
-  input::placeholder {
-    color: #9aa4b2;
+  .shell {
+    width: 100% !important;
+    max-width: 100% !important;
   }
 
-  input:focus {
-    outline: none;
+  .logo {
+    font-size: 28px !important;
   }
 
-  .authCard {
-    animation: cardEnter 0.7s ease both;
+  .logoTagline {
+    font-size: 10px !important;
+  }
+
+  .card {
+    width: 100% !important;
+    padding:
+      25px 18px 20px !important;
+    border-radius: 25px !important;
   }
 
   .topIcon {
-    animation: floatIcon 3s ease-in-out infinite;
+    width: 58px !important;
+    height: 58px !important;
+    font-size: 26px !important;
   }
 
-  .fieldAnimation {
-    animation: fieldEnter 0.55s ease both;
+  .title {
+    font-size: 25px !important;
   }
 
-  .primaryButton,
-  .googleButton,
-  .switchButton {
-    transition:
-      transform 0.2s ease,
-      box-shadow 0.2s ease,
-      border-color 0.2s ease;
+  .subtitle {
+    font-size: 12px !important;
+    line-height: 1.55 !important;
   }
 
-  .primaryButton:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 14px 30px rgba(57, 73, 230, 0.30);
+  .input {
+    font-size: 14px !important;
   }
 
-  .primaryButton:active,
-  .googleButton:active {
-    transform: scale(0.98);
+  .primaryButton {
+    min-height: 52px !important;
+    font-size: 14px !important;
   }
 
-  .googleButton:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 24px rgba(30, 41, 59, 0.10);
-    border-color: #cbd5e1;
+  .googleButton {
+    min-height: 50px !important;
+    font-size: 13px !important;
   }
 
-  .switchButton:hover {
-    transform: translateY(-1px);
+  .footer {
+    flex-direction: column !important;
+    gap: 5px !important;
+    text-align: center !important;
+  }
+}
+
+@media (max-width: 360px) {
+
+  .page {
+    padding:
+      16px 9px 14px !important;
   }
 
-  @keyframes cardEnter {
-    from {
-      opacity: 0;
-      transform: translateY(22px) scale(0.98);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-    }
+  .card {
+    padding:
+      21px 14px 17px !important;
   }
 
-  @keyframes fieldEnter {
-    from {
-      opacity: 0;
-      transform: translateY(8px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
+  .logo {
+    font-size: 25px !important;
   }
 
-  @keyframes floatIcon {
-    0%, 100% {
-      transform: translateY(0);
-    }
-    50% {
-      transform: translateY(-5px);
-    }
+  .title {
+    font-size: 22px !important;
   }
 
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
+  .inputWrap {
+    min-height: 47px !important;
   }
 
-  @media (max-width: 520px) {
-    .authCard {
-      padding: 28px 20px !important;
-      border-radius: 24px !important;
-    }
+  .input {
+    font-size: 13px !important;
   }
 
-  @media (max-width: 360px) {
-    .authCard {
-      padding: 24px 16px !important;
-    }
+  .trustRow {
+    font-size: 9px !important;
   }
-
-  @media (prefers-reduced-motion: reduce) {
-    .authCard,
-    .topIcon,
-    .fieldAnimation {
-      animation: none !important;
-    }
-
-    .primaryButton,
-    .googleButton,
-    .switchButton {
-      transition: none !important;
-    }
-  }
+}
 `;
 
 const styles: Record<string, CSSProperties> = {
   page: {
     minHeight: "100vh",
     width: "100%",
+    padding: "30px 16px 20px",
+    background:
+      "linear-gradient(135deg, #eef5ff 0%, #f8f6ff 50%, #fff7ef 100%)",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
     position: "relative",
     overflow: "hidden",
-    background:
-      "linear-gradient(135deg, #eef4ff 0%, #f7f5ff 48%, #fff7f0 100%)",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "28px 16px 20px",
     fontFamily:
-      "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    color: "#111827",
+      "Georgia, 'Times New Roman', serif",
   },
 
   glowOne: {
     position: "fixed",
-    width: "300px",
-    height: "300px",
+    width: "320px",
+    height: "320px",
     borderRadius: "50%",
-    background: "rgba(37, 99, 235, 0.16)",
+    background:
+      "rgba(37, 99, 235, 0.10)",
     filter: "blur(80px)",
-    top: "-120px",
-    left: "-100px",
+    top: "-150px",
+    left: "-140px",
     pointerEvents: "none",
   },
 
@@ -464,268 +746,327 @@ const styles: Record<string, CSSProperties> = {
     width: "330px",
     height: "330px",
     borderRadius: "50%",
-    background: "rgba(124, 58, 237, 0.13)",
-    filter: "blur(90px)",
-    bottom: "-150px",
-    right: "-110px",
+    background:
+      "rgba(124, 58, 237, 0.09)",
+    filter: "blur(85px)",
+    bottom: "-160px",
+    right: "-150px",
     pointerEvents: "none",
   },
 
-  authCard: {
+  shell: {
     width: "100%",
-    maxWidth: "470px",
+    maxWidth: "430px",
     position: "relative",
-    zIndex: 2,
-    background: "rgba(255,255,255,0.90)",
-    backdropFilter: "blur(20px)",
-    WebkitBackdropFilter: "blur(20px)",
-    border: "1px solid rgba(255,255,255,0.95)",
-    borderRadius: "28px",
-    padding: "34px",
-    boxShadow:
-      "0 25px 70px rgba(30, 64, 175, 0.13), 0 5px 20px rgba(15,23,42,0.05)",
+    zIndex: 1,
   },
 
-  brandArea: {
+  logoArea: {
     textAlign: "center",
     marginBottom: "18px",
   },
 
   logo: {
-    fontSize: "31px",
+    fontSize: "32px",
     fontWeight: 900,
-    letterSpacing: "2px",
-    lineHeight: 1.1,
+    letterSpacing: "-1px",
+    lineHeight: 1.05,
+    background:
+      "linear-gradient(90deg, #155eef 0%, #4f46e5 55%, #f97316 100%)",
+    WebkitBackgroundClip: "text",
+    WebkitTextFillColor: "transparent",
   },
 
-  logoAura: {
-    color: "#2563eb",
-  },
-
-  logoCamp: {
-    color: "#f97316",
-    marginLeft: "7px",
-  },
-
-  tagline: {
+  logoTagline: {
+    color: "#94a3b8",
+    fontSize: "11px",
     marginTop: "7px",
-    color: "#7b8798",
-    fontSize: "12px",
-    fontWeight: 600,
-    letterSpacing: "0.8px",
+    letterSpacing: "0.5px",
+  },
+
+  card: {
+    width: "100%",
+    background:
+      "rgba(255,255,255,0.94)",
+    backdropFilter: "blur(18px)",
+    WebkitBackdropFilter: "blur(18px)",
+    border:
+      "1px solid rgba(226,232,240,0.9)",
+    borderRadius: "28px",
+    padding: "30px 28px 23px",
+    boxShadow:
+      "0 25px 70px rgba(30,64,175,0.13)",
+    textAlign: "center",
   },
 
   topIcon: {
-    width: "58px",
-    height: "58px",
-    margin: "12px auto 16px",
-    borderRadius: "19px",
-    background:
-      "linear-gradient(135deg, rgba(37,99,235,0.12), rgba(124,58,237,0.14))",
+    width: "64px",
+    height: "64px",
+    margin: "0 auto 14px",
+    borderRadius: "20px",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: "27px",
-    boxShadow: "0 10px 25px rgba(37,99,235,0.08)",
-  },
-
-  headingArea: {
-    textAlign: "center",
-    marginBottom: "25px",
+    fontSize: "29px",
+    background:
+      "linear-gradient(135deg, #eff6ff, #f5f3ff)",
+    boxShadow:
+      "0 10px 25px rgba(79,70,229,0.10)",
   },
 
   title: {
     margin: 0,
     color: "#111827",
-    fontSize: "29px",
-    fontWeight: 850,
-    letterSpacing: "-0.7px",
+    fontSize: "28px",
+    lineHeight: 1.15,
+    fontWeight: 900,
+    letterSpacing: "-0.6px",
   },
 
   subtitle: {
-    margin: "8px 0 0",
-    color: "#718096",
-    fontSize: "14px",
-    lineHeight: 1.5,
+    margin:
+      "8px auto 22px",
+    maxWidth: "320px",
+    color: "#64748b",
+    fontSize: "13px",
+    lineHeight: 1.55,
   },
 
-  fieldGroup: {
+  message: {
+    width: "100%",
+    padding: "11px 12px",
+    borderRadius: "12px",
     marginBottom: "15px",
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "8px",
+    textAlign: "left",
+    fontFamily:
+      "Inter, ui-sans-serif, system-ui, sans-serif",
+    fontSize: "11px",
+    lineHeight: 1.45,
+  },
+
+  successMessage: {
+    background: "#ecfdf5",
+    border: "1px solid #a7f3d0",
+    color: "#047857",
+  },
+
+  errorMessage: {
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    color: "#b91c1c",
+  },
+
+  form: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "14px",
+    textAlign: "left",
+  },
+
+  field: {
+    width: "100%",
   },
 
   label: {
     display: "block",
-    marginBottom: "7px",
-    color: "#263244",
-    fontSize: "13px",
-    fontWeight: 750,
+    color: "#334155",
+    fontSize: "11px",
+    fontWeight: 800,
+    marginBottom: "6px",
+    fontFamily:
+      "Inter, ui-sans-serif, system-ui, sans-serif",
   },
 
   inputWrap: {
     width: "100%",
-    minWidth: 0,
-    height: "52px",
+    minHeight: "50px",
+    borderRadius: "13px",
+    border:
+      "1px solid #dbe3ef",
+    background: "#f8fafc",
     display: "flex",
     alignItems: "center",
-    gap: "10px",
-    background: "#f8fafc",
-    border: "1px solid #e2e8f0",
-    borderRadius: "14px",
-    padding: "0 14px",
-    transition: "all 0.2s ease",
+    padding: "0 12px",
+    transition:
+      "border-color 0.2s ease, box-shadow 0.2s ease",
   },
 
   inputIcon: {
-    flex: "0 0 auto",
-    fontSize: "17px",
-    opacity: 0.8,
+    width: "25px",
+    minWidth: "25px",
+    fontSize: "14px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: "7px",
   },
 
   input: {
     width: "100%",
     minWidth: 0,
-    height: "100%",
     border: "none",
     outline: "none",
     background: "transparent",
     color: "#111827",
-    fontSize: "14px",
+    fontSize: "13px",
+    padding: "13px 0",
+    fontFamily:
+      "Inter, ui-sans-serif, system-ui, sans-serif",
   },
 
   primaryButton: {
     width: "100%",
-    minHeight: "53px",
-    marginTop: "5px",
+    minHeight: "52px",
     border: "none",
-    borderRadius: "14px",
+    borderRadius: "13px",
+    marginTop: "3px",
     background:
-      "linear-gradient(135deg, #2563eb 0%, #4f46e5 55%, #7c3aed 100%)",
+      "linear-gradient(90deg, #2563eb 0%, #4f46e5 55%, #7c3aed 100%)",
     color: "#fff",
-    padding: "14px 18px",
-    fontSize: "15px",
-    fontWeight: 800,
-    cursor: "pointer",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    gap: "9px",
-    boxShadow: "0 10px 25px rgba(59, 70, 230, 0.22)",
+    gap: "10px",
+    fontSize: "14px",
+    fontWeight: 850,
+    cursor: "pointer",
+    boxShadow:
+      "0 10px 24px rgba(37,99,235,0.22)",
   },
 
-  arrow: {
-    fontSize: "19px",
+  buttonArrow: {
+    fontSize: "17px",
     lineHeight: 1,
   },
 
-  spinner: {
+  buttonSpinner: {
     width: "17px",
     height: "17px",
-    border: "2px solid rgba(255,255,255,0.4)",
-    borderTopColor: "#fff",
     borderRadius: "50%",
+    border:
+      "2px solid rgba(255,255,255,0.35)",
+    borderTopColor: "#fff",
+    animation:
+      "spin 0.7s linear infinite",
     display: "inline-block",
-    animation: "spin 0.7s linear infinite",
   },
 
-  divider: {
+    divider: {
     display: "flex",
     alignItems: "center",
-    gap: "12px",
-    margin: "23px 0",
+    gap: "10px",
+    margin: "20px 0 15px",
   },
 
-  line: {
-    flex: 1,
+  dividerLine: {
     height: "1px",
     background: "#e5e7eb",
+    flex: 1,
   },
 
-  orText: {
-    color: "#9aa4b2",
-    fontSize: "11px",
+  dividerText: {
+    color: "#94a3b8",
+    fontSize: "9px",
     fontWeight: 800,
-    letterSpacing: "1px",
+    fontFamily:
+      "Inter, ui-sans-serif, system-ui, sans-serif",
   },
 
   googleButton: {
     width: "100%",
-    minHeight: "52px",
-    border: "1px solid #e2e8f0",
-    borderRadius: "14px",
+    minHeight: "50px",
+    borderRadius: "13px",
+    border: "1px solid #dbe3ef",
     background: "#fff",
     color: "#1f2937",
-    padding: "13px 18px",
-    fontSize: "14px",
-    fontWeight: 750,
-    cursor: "pointer",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    gap: "11px",
+    gap: "10px",
+    cursor: "pointer",
+    fontSize: "13px",
+    fontWeight: 750,
+    fontFamily:
+      "Inter, ui-sans-serif, system-ui, sans-serif",
   },
 
   googleIcon: {
-    width: "25px",
-    height: "25px",
+    width: "22px",
+    height: "22px",
     borderRadius: "50%",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     color: "#4285F4",
-    fontSize: "20px",
-    fontWeight: 800,
-  },
-
-  messageBox: {
-    marginTop: "17px",
-    padding: "12px 14px",
-    borderRadius: "12px",
-    background: "#f8fafc",
-    border: "1px solid #e2e8f0",
-    color: "#475569",
-    textAlign: "center",
-    fontSize: "12px",
-    lineHeight: 1.45,
+    fontWeight: 900,
+    fontSize: "17px",
+    fontFamily: "Arial, sans-serif",
   },
 
   switchArea: {
-    textAlign: "center",
-    marginTop: "23px",
+    marginTop: "20px",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: "5px",
+    fontFamily:
+      "Inter, ui-sans-serif, system-ui, sans-serif",
   },
 
   switchText: {
-    color: "#718096",
-    fontSize: "13px",
+    color: "#64748b",
+    fontSize: "11px",
   },
 
   switchButton: {
     border: "none",
     background: "transparent",
     color: "#2563eb",
-    fontSize: "14px",
+    padding: 0,
+    fontSize: "11px",
     fontWeight: 850,
     cursor: "pointer",
-    padding: "7px 4px",
-    marginLeft: "4px",
   },
 
   trustRow: {
+    marginTop: "19px",
+    paddingTop: "14px",
+    borderTop: "1px solid #eef2f7",
     display: "flex",
     justifyContent: "center",
     alignItems: "center",
-    gap: "7px",
-    marginTop: "20px",
-    color: "#9aa4b2",
+    gap: "9px",
+    color: "#94a3b8",
     fontSize: "10px",
-    fontWeight: 650,
+    fontFamily:
+      "Inter, ui-sans-serif, system-ui, sans-serif",
+  },
+
+  trustItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: "4px",
+  },
+
+  trustDot: {
+    color: "#cbd5e1",
   },
 
   footer: {
-    position: "relative",
-    zIndex: 2,
-    marginTop: "18px",
-    textAlign: "center",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: "10px",
+    flexWrap: "wrap",
+    marginTop: "15px",
     color: "#94a3b8",
-    fontSize: "10px",
+    fontSize: "9px",
+    fontFamily:
+      "Inter, ui-sans-serif, system-ui, sans-serif",
   },
 };
+      
