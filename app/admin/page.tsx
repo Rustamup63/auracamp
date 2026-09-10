@@ -822,3 +822,46 @@ const campaignTop: React.CSSProperties = {
 
 const campaignName: React.CSSProperties = {
   margin: 0
+  margin: 0,
+  fontSize: 17,
+};
+
+const campaignMeta: React.CSSProperties = {
+  color: "#6b7280",
+  fontSize: 13,
+  marginTop: 6,
+};
+
+const statusBadge: React.CSSProperties = {
+  borderRadius: 20,
+  padding: "4px 9px",
+  fontSize: 11,
+  fontWeight: 700,
+  textTransform: "uppercase",
+};
+
+const activeBadge: React.CSSProperties = {
+  background: "#dcfce7",
+  color: "#166534",
+};
+
+const pausedBadge: React.CSSProperties = {
+  background: "#fef3c7",
+  color: "#92400e",
+};
+
+const endedBadge: React.CSSProperties = {
+  background: "#fee2e2",
+  color: "#991b1b",
+};
+
+const actionRow: React.CSSProperties = {
+  display: "flex",
+  gap: 8,
+};
+
+const emptyStyle: React.CSSProperties = {
+  textAlign: "center",
+  padding: 50,
+  color: "#6b7280",
+};
