@@ -2,75 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-import type { CSSProperties } from "react";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
 );
 
-type Campaign = {
-  id: string;
-  name: string;
-  slug: string;
-  description: string | null;
-  category: string | null;
-  image_url: string | null;
-  landing_url: string;
-  reward: number;
-  advertiser_payout: number;
-  conversion_type: string | null;
-  terms: string | null;
-  daily_limit: number | null;
-  total_limit: number | null;
-  conversions_count: number;
-  status: string;
-  created_at: string;
-};
-
-type Withdrawal = {
-  id: string;
-  user_id: string;
-  amount: number;
-  method: string;
-  account_name: string | null;
-  upi_id: string | null;
-  bank_name: string | null;
-  account_number: string | null;
-  ifsc_code: string | null;
-  status: string;
-  admin_note: string | null;
-  rejection_reason: string | null;
-  processed_by: string | null;
-  processed_at: string | null;
-  created_at: string;
-};
-
-type Profile = {
-  id: string;
-  full_name: string | null;
-  email: string | null;
-  wallet_balance: number;
-  pending_balance: number;
-  total_earned: number;
-  total_withdrawn: number;
-};
-
-type CampaignForm = {
-  name: string;
-  description: string;
-  category: string;
-  image_url: string;
-  landing_url: string;
-  reward: string;
-  advertiser_payout: string;
-  conversion_type: string;
-  terms: string;
-  daily_limit: string;
-  total_limit: string;
-};
-
-const emptyForm: CampaignForm = {
+const empty = {
   name: "",
   description: "",
   category: "Other",
@@ -85,47 +23,27 @@ const emptyForm: CampaignForm = {
 };
 
 export default function AdminPage() {
-  const [loading, setLoading] = useState(true);
-  const [authorized, setAuthorized] = useState(false);
-
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
-  const [profiles, setProfiles] = useState<Record<string, Profile>>({});
-
-  const [activeTab, setActiveTab] = useState<
-    "overview" | "campaigns" | "withdrawals"
-  >("overview");
-
-  const [showCampaignForm, setShowCampaignForm] = useState(false);
-  const [editingCampaign, setEditingCampaign] =
-    useState<Campaign | null>(null);
-
-  const [form, setForm] = useState<CampaignForm>(emptyForm);
-
-  const [saving, setSaving] = useState(false);
-  const [actionId, setActionId] = useState<string | null>(null);
-
-  const [message, setMessage] = useState("");
-  const [errorMessage, setErrorMessage] = useState("");
-
-  const [selectedWithdrawal, setSelectedWithdrawal] =
-    useState<Withdrawal | null>(null);
-
-  const [withdrawalAction, setWithdrawalAction] = useState<
-    "approve" | "reject" | null
-  >(null);
-
-  const [withdrawalNote, setWithdrawalNote] = useState("");
+  const [ok, setOk] = useState(false);
+  const [tab, setTab] = useState("overview");
+  const [campaigns, setCampaigns] = useState<any[]>([]);
+  const [withdrawals, setWithdrawals] = useState<any[]>([]);
+  const [form, setForm] = useState<any>(empty);
+  const [edit, setEdit] = useState<any>(null);
+  const [show, setShow] = useState(false);
+  const [selected, setSelected] = useState<any>(null);
+  const [action, setAction] = useState("");
+  const [note, setNote] = useState("");
+  const [msg, setMsg] = useState("");
 
   useEffect(() => {
-    checkAdmin();
+    init();
   }, []);
 
   useEffect(() => {
-    if (!authorized) return;
+    if (!ok) return;
 
     const channel = supabase
-      .channel("auracamp-admin-withdrawals")
+      .channel("withdrawals")
       .on(
         "postgres_changes",
         {
@@ -133,2874 +51,621 @@ export default function AdminPage() {
           schema: "public",
           table: "withdrawals",
         },
-        () => {
-          loadWithdrawals();
-        }
+        loadWithdrawals
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [authorized]);
+  }, [ok]);
 
-  async function checkAdmin() {
-    try {
-      setLoading(true);
+  async function init() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        window.location.href = "/login";
-        return;
-      }
-
-      const { data: admin, error } = await supabase
-        .from("admin_users")
-        .select("id, role, is_active")
-        .eq("id", user.id)
-        .eq("is_active", true)
-        .maybeSingle();
-
-      if (error || !admin) {
-        setAuthorized(false);
-        setLoading(false);
-        return;
-      }
-
-      setAuthorized(true);
-
-      await Promise.all([
-        loadCampaigns(),
-        loadWithdrawals(),
-      ]);
-    } catch (error) {
-      console.error("Admin check error:", error);
-      setAuthorized(false);
-    } finally {
-      setLoading(false);
+    if (!user) {
+      location.href = "/login";
+      return;
     }
+
+    const { data } = await supabase
+      .from("admin_users")
+      .select("*")
+      .eq("id", user.id)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (!data) return;
+
+    setOk(true);
+    loadCampaigns();
+    loadWithdrawals();
   }
 
   async function loadCampaigns() {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("campaigns")
-      .select(
-        [
-          "id",
-          "name",
-          "slug",
-          "description",
-          "category",
-          "image_url",
-          "landing_url",
-          "reward",
-          "advertiser_payout",
-          "conversion_type",
-          "terms",
-          "daily_limit",
-          "total_limit",
-          "conversions_count",
-          "status",
-          "created_at",
-        ].join(",")
-      )
+      .select("*")
       .order("created_at", { ascending: false });
 
-    if (error) {
-      console.error("Campaign load error:", error);
-      return;
-    }
-
-    setCampaigns((data as Campaign[]) || []);
+    setCampaigns(data || []);
   }
 
   async function loadWithdrawals() {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("withdrawals")
-      .select(
-        [
-          "id",
-          "user_id",
-          "amount",
-          "method",
-          "account_name",
-          "upi_id",
-          "bank_name",
-          "account_number",
-          "ifsc_code",
-          "status",
-          "admin_note",
-          "rejection_reason",
-          "processed_by",
-          "processed_at",
-          "created_at",
-        ].join(",")
-      )
+      .select("*")
       .order("created_at", { ascending: false })
       .limit(100);
 
-    if (error) {
-      console.error("Withdrawal load error:", error);
-      return;
-    }
-
-    const list = (data as Withdrawal[]) || [];
-
-    setWithdrawals(list);
-
-    const userIds = Array.from(
-      new Set(list.map((item) => item.user_id))
-    );
-
-    if (userIds.length === 0) {
-      setProfiles({});
-      return;
-    }
-
-    const { data: profileData, error: profileError } =
-      await supabase
-        .from("profiles")
-        .select(
-          "id,full_name,email,wallet_balance,pending_balance,total_earned,total_withdrawn"
-        )
-        .in("id", userIds);
-
-    if (profileError) {
-      console.error("Profile load error:", profileError);
-      return;
-    }
-
-    const map: Record<string, Profile> = {};
-
-    ((profileData as Profile[]) || []).forEach((profile) => {
-      map[profile.id] = profile;
-    });
-
-    setProfiles(map);
+    setWithdrawals(data || []);
   }
 
-  function updateForm(
-    field: keyof CampaignForm,
-    value: string
-  ) {
-    setForm((previous) => ({
-      ...previous,
-      [field]: value,
-    }));
+  function set(key: string, value: string) {
+    setForm((x: any) => ({ ...x, [key]: value }));
   }
 
-  function resetForm() {
-    setForm(emptyForm);
-    setEditingCampaign(null);
-    setShowCampaignForm(false);
+  function createCampaign() {
+    setEdit(null);
+    setForm(empty);
+    setShow(true);
   }
 
-  function openCreateCampaign() {
-    setErrorMessage("");
-    setMessage("");
-    setEditingCampaign(null);
-    setForm(emptyForm);
-    setShowCampaignForm(true);
-  }
-
-  function openEditCampaign(campaign: Campaign) {
-    setErrorMessage("");
-    setMessage("");
-
-    setEditingCampaign(campaign);
-
+  function editCampaign(c: any) {
+    setEdit(c);
     setForm({
-      name: campaign.name || "",
-      description: campaign.description || "",
-      category: campaign.category || "Other",
-      image_url: campaign.image_url || "",
-      landing_url: campaign.landing_url || "",
-      reward: String(campaign.reward ?? ""),
-      advertiser_payout: String(
-        campaign.advertiser_payout ?? ""
-      ),
-      conversion_type:
-        campaign.conversion_type || "Complete Offer",
-      terms: campaign.terms || "",
-      daily_limit:
-        campaign.daily_limit === null
-          ? ""
-          : String(campaign.daily_limit),
-      total_limit:
-        campaign.total_limit === null
-          ? ""
-          : String(campaign.total_limit),
+      name: c.name || "",
+      description: c.description || "",
+      category: c.category || "Other",
+      image_url: c.image_url || "",
+      landing_url: c.landing_url || "",
+      reward: String(c.reward ?? ""),
+      advertiser_payout: String(c.advertiser_payout ?? ""),
+      conversion_type: c.conversion_type || "Complete Offer",
+      terms: c.terms || "",
+      daily_limit: c.daily_limit == null ? "" : String(c.daily_limit),
+      total_limit: c.total_limit == null ? "" : String(c.total_limit),
     });
-
-    setShowCampaignForm(true);
+    setShow(true);
   }
 
-  function createSlug(name: string) {
-    const base = name
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
+  async function save(e: any) {
+    e.preventDefault();
 
-    return `${base || "campaign"}-${Date.now()}`;
-  }
-
-  function validateCampaignForm() {
-    if (!form.name.trim()) {
-      return "Campaign name is required.";
-    }
-
-    if (!form.landing_url.trim()) {
-      return "Landing URL is required.";
-    }
-
-    const reward = Number(form.reward);
-    const payout = Number(form.advertiser_payout);
-
-    if (!Number.isFinite(reward) || reward < 0) {
-      return "Enter a valid user reward.";
-    }
-
-    if (!Number.isFinite(payout) || payout < 0) {
-      return "Enter a valid advertiser payout.";
-    }
-
-    if (reward > payout) {
-      return "User reward cannot be higher than advertiser payout.";
-    }
-
-    if (
-      form.daily_limit &&
-      (!Number.isFinite(Number(form.daily_limit)) ||
-        Number(form.daily_limit) < 0)
-    ) {
-      return "Enter a valid daily limit.";
-    }
-
-    if (
-      form.total_limit &&
-      (!Number.isFinite(Number(form.total_limit)) ||
-        Number(form.total_limit) < 0)
-    ) {
-      return "Enter a valid total limit.";
-    }
-
-    return null;
-  }
-
-  async function saveCampaign(
-    event: React.FormEvent<HTMLFormElement>
-  ) {
-    event.preventDefault();
-
-    const validationError = validateCampaignForm();
-
-    if (validationError) {
-      setErrorMessage(validationError);
-      setMessage("");
+    if (!form.name || !form.landing_url) {
+      setMsg("Campaign name and landing URL are required.");
       return;
     }
 
-    setSaving(true);
-    setErrorMessage("");
-    setMessage("");
-
-    const payload = {
-      name: form.name.trim(),
-      description: form.description.trim() || null,
-      category: form.category.trim() || "Other",
-      image_url: form.image_url.trim() || null,
-      landing_url: form.landing_url.trim(),
-      reward: Number(form.reward),
-      advertiser_payout: Number(form.advertiser_payout),
-      conversion_type:
-        form.conversion_type.trim() || "Complete Offer",
-      terms: form.terms.trim() || null,
-      daily_limit: form.daily_limit
-        ? Number(form.daily_limit)
-        : null,
-      total_limit: form.total_limit
-        ? Number(form.total_limit)
-        : null,
+    const data = {
+      name: form.name,
+      description: form.description || null,
+      category: form.category,
+      image_url: form.image_url || null,
+      landing_url: form.landing_url,
+      reward: Number(form.reward || 0),
+      advertiser_payout: Number(form.advertiser_payout || 0),
+      conversion_type: form.conversion_type,
+      terms: form.terms || null,
+      daily_limit: form.daily_limit ? Number(form.daily_limit) : null,
+      total_limit: form.total_limit ? Number(form.total_limit) : null,
     };
 
-    try {
-      if (editingCampaign) {
-        const { error } = await supabase
-          .from("campaigns")
-          .update(payload)
-          .eq("id", editingCampaign.id);
+    const result = edit
+      ? await supabase.from("campaigns").update(data).eq("id", edit.id)
+      : await supabase.from("campaigns").insert({
+          ...data,
+          slug:
+            form.name.toLowerCase().replace(/[^a-z0-9]+/g, "-") +
+            "-" +
+            Date.now(),
+          status: "active",
+        });
 
-        if (error) {
-          setErrorMessage(error.message);
-          return;
-        }
-
-        setMessage("Campaign updated successfully.");
-      } else {
-        const { error } = await supabase
-          .from("campaigns")
-          .insert({
-            ...payload,
-            slug: createSlug(form.name),
-            status: "active",
-          });
-
-        if (error) {
-          setErrorMessage(error.message);
-          return;
-        }
-
-        setMessage("Campaign created successfully.");
-      }
-
-      resetForm();
-      await loadCampaigns();
-    } catch (error) {
-      console.error("Campaign save error:", error);
-      setErrorMessage("Something went wrong.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function changeCampaignStatus(
-    campaign: Campaign,
-    status: "active" | "paused" | "ended"
-  ) {
-    const labels = {
-      active: "activate",
-      paused: "pause",
-      ended: "end",
-    };
-
-    const confirmed = window.confirm(
-      `Are you sure you want to ${labels[status]} "${campaign.name}"?`
-    );
-
-    if (!confirmed) return;
-
-    setActionId(campaign.id);
-    setErrorMessage("");
-    setMessage("");
-
-    const { error } = await supabase
-      .from("campaigns")
-      .update({ status })
-      .eq("id", campaign.id);
-
-    setActionId(null);
-
-    if (error) {
-      setErrorMessage(error.message);
+    if (result.error) {
+      setMsg(result.error.message);
       return;
     }
 
-    setMessage(
-      `Campaign ${labels[status]}d successfully.`
-    );
-
-    await loadCampaigns();
+    setMsg(edit ? "Campaign updated." : "Campaign created.");
+    setShow(false);
+    setEdit(null);
+    setForm(empty);
+    loadCampaigns();
   }
 
-  async function deleteCampaign(campaign: Campaign) {
-    const confirmed = window.confirm(
-      `Delete "${campaign.name}" permanently?`
-    );
-
-    if (!confirmed) return;
-
-    setActionId(campaign.id);
-    setErrorMessage("");
-    setMessage("");
-
-    const { error } = await supabase
+  async function status(id: string, value: string) {
+    await supabase
       .from("campaigns")
-      .delete()
-      .eq("id", campaign.id);
+      .update({ status: value })
+      .eq("id", id);
 
-    setActionId(null);
-
-    if (error) {
-      setErrorMessage(error.message);
-      return;
-    }
-
-    setMessage("Campaign deleted successfully.");
-
-    await loadCampaigns();
+    loadCampaigns();
   }
 
-  function openWithdrawalAction(
-    withdrawal: Withdrawal,
-    action: "approve" | "reject"
-  ) {
-    setSelectedWithdrawal(withdrawal);
-    setWithdrawalAction(action);
-    setWithdrawalNote("");
-    setErrorMessage("");
-    setMessage("");
-  }
+  async function remove(id: string) {
+    if (!confirm("Delete this campaign?")) return;
 
-  function closeWithdrawalAction() {
-    setSelectedWithdrawal(null);
-    setWithdrawalAction(null);
-    setWithdrawalNote("");
+    await supabase.from("campaigns").delete().eq("id", id);
+    loadCampaigns();
   }
 
   async function processWithdrawal() {
-    if (!selectedWithdrawal || !withdrawalAction) {
+    if (!selected || !action) return;
+
+    if (action === "reject" && !note.trim()) {
+      setMsg("Rejection reason is required.");
       return;
     }
 
-    const withdrawal = selectedWithdrawal;
-
-    if (withdrawal.status !== "pending") {
-      setErrorMessage(
-        "This withdrawal has already been processed."
-      );
-      return;
-    }
-
-    if (
-      withdrawalAction === "reject" &&
-      !withdrawalNote.trim()
-    ) {
-      setErrorMessage(
-        "Please enter a rejection reason."
-      );
-      return;
-    }
-
-    setActionId(withdrawal.id);
-    setErrorMessage("");
-    setMessage("");
-
-    try {
-      /*
-       * The database RPC is the correct place for withdrawal
-       * balance/refund logic. This page only sends the admin
-       * action to the existing RPC.
-       *
-       * Expected RPC:
-       * admin_process_withdrawal(
-       *   p_withdrawal_id,
-       *   p_action,
-       *   p_admin_note
-       * )
-       */
-
-      const { error } = await supabase.rpc(
-        "admin_process_withdrawal",
-        {
-          p_withdrawal_id: withdrawal.id,
-          p_action: withdrawalAction,
-          p_admin_note: withdrawalNote.trim() || null,
-        }
-      );
-
-      if (error) {
-        setErrorMessage(error.message);
-        return;
+    const { error } = await supabase.rpc(
+      "admin_process_withdrawal",
+      {
+        p_withdrawal_id: selected.id,
+        p_action: action,
+        p_admin_note: note || null,
       }
+    );
 
-      setMessage(
-        withdrawalAction === "approve"
-          ? "Withdrawal approved successfully."
-          : "Withdrawal rejected successfully."
-      );
-
-      closeWithdrawalAction();
-
-      await loadWithdrawals();
-    } catch (error) {
-      console.error("Withdrawal action error:", error);
-      setErrorMessage("Unable to process withdrawal.");
-    } finally {
-      setActionId(null);
-    }
-  }
-
-  async function logout() {
-    await supabase.auth.signOut();
-    window.location.href = "/login";
-  }
-
-  function formatDate(value: string) {
-    return new Date(value).toLocaleString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  }
-
-  function getUserName(userId: string) {
-    return profiles[userId]?.full_name || "User";
-  }
-
-  function getUserEmail(userId: string) {
-    return profiles[userId]?.email || userId;
-  }
-
-  function withdrawalStatusStyle(status: string) {
-    if (status === "paid" || status === "approved") {
-      return {
-        ...styles.status,
-        ...styles.statusSuccess,
-      };
+    if (error) {
+      setMsg(error.message);
+      return;
     }
 
-    if (status === "rejected") {
-      return {
-        ...styles.status,
-        ...styles.statusDanger,
-      };
-    }
+    setMsg(
+      action === "approve"
+        ? "Withdrawal approved."
+        : "Withdrawal rejected."
+    );
 
-    if (status === "processing") {
-      return {
-        ...styles.status,
-        ...styles.statusWarning,
-      };
-    }
-
-    return {
-      ...styles.status,
-      ...styles.statusPending,
-    };
+    setSelected(null);
+    setAction("");
+    setNote("");
+    loadWithdrawals();
   }
 
-  function campaignStatusStyle(status: string) {
-    if (status === "active") {
-      return {
-        ...styles.status,
-        ...styles.statusSuccess,
-      };
-    }
-
-    if (status === "paused") {
-      return {
-        ...styles.status,
-        ...styles.statusWarning,
-      };
-    }
-
-    return {
-      ...styles.status,
-      ...styles.statusDanger,
-    };
-  }
-
-  const activeCampaigns = campaigns.filter(
-    (campaign) => campaign.status === "active"
-  ).length;
-
-  const pausedCampaigns = campaigns.filter(
-    (campaign) => campaign.status === "paused"
-  ).length;
-
-  const pendingWithdrawals = withdrawals.filter(
-    (withdrawal) => withdrawal.status === "pending"
-  );
-
-  const pendingWithdrawalAmount = pendingWithdrawals.reduce(
-    (sum, withdrawal) =>
-      sum + Number(withdrawal.amount || 0),
-    0
-  );
-
-  const totalCampaignRewards = campaigns.reduce(
-    (sum, campaign) =>
-      sum + Number(campaign.reward || 0),
-    0
-  );
-
-  if (loading) {
+  if (!ok) {
     return (
-      <>
-        <style>{globalStyles}</style>
-
-        <main style={styles.page}>
-          <div style={styles.loadingCard}>
-            <div style={styles.spinner} />
-            <div style={styles.loadingTitle}>
-              AURACAMP
-            </div>
-            <div style={styles.loadingText}>
-              Loading Admin Panel...
-            </div>
-          </div>
-        </main>
-      </>
+      <main style={S.center}>
+        <h2>Checking Admin Access...</h2>
+      </main>
     );
   }
 
-  if (!authorized) {
-    return (
-      <>
-        <style>{globalStyles}</style>
-
-        <main style={styles.page}>
-          <div style={styles.deniedCard}>
-            <div style={styles.deniedIcon}>🔒</div>
-
-            <h1 style={styles.deniedTitle}>
-              Access Denied
-            </h1>
-
-            <p style={styles.deniedText}>
-              You do not have permission to access
-              the AURACAMP Admin Panel.
-            </p>
-
-            <button
-              type="button"
-              onClick={() => {
-                window.location.href = "/";
-              }}
-              style={styles.primaryButton}
-            >
-              Go Home
-            </button>
-          </div>
-        </main>
-      </>
-    );
-  }
+  const active = campaigns.filter((x) => x.status === "active").length;
+  const pending = withdrawals.filter((x) => x.status === "pending");
+  const pendingAmount = pending.reduce(
+    (a, x) => a + Number(x.amount || 0),
+    0
+  );
 
   return (
-    <>
-      <style>{globalStyles}</style>
+    <main style={S.page}>
+      <div style={S.wrap}>
+        <header style={S.header}>
+          <div>
+            <b style={S.logo}>AURACAMP</b>
+            <small> ADMIN PANEL</small>
+          </div>
+          <button onClick={() => supabase.auth.signOut().then(() => location.href = "/login")} style={S.darkBtn}>
+            Logout
+          </button>
+        </header>
 
-      <main style={styles.page}>
-        <div style={styles.container}>
-          <header style={styles.header}>
-            <div>
-              <div style={styles.brand}>
-                AURACAMP
-              </div>
-
-              <div style={styles.adminLabel}>
-                ADMIN CONTROL PANEL
-              </div>
-            </div>
-
+        <nav style={S.nav}>
+          {["overview", "campaigns", "withdrawals"].map((x) => (
             <button
-              type="button"
-              onClick={logout}
-              style={styles.logoutButton}
-            >
-              Logout
-            </button>
-          </header>
-
-          <nav style={styles.tabs}>
-            <button
-              type="button"
-              onClick={() => setActiveTab("overview")}
+              key={x}
+              onClick={() => setTab(x)}
               style={{
-                ...styles.tab,
-                ...(activeTab === "overview"
-                  ? styles.tabActive
-                  : {}),
+                ...S.tab,
+                ...(tab === x ? S.tabOn : {}),
               }}
             >
-              Overview
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab("campaigns")}
-              style={{
-                ...styles.tab,
-                ...(activeTab === "campaigns"
-                  ? styles.tabActive
-                  : {}),
-              }}
-            >
-              Campaigns
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                setActiveTab("withdrawals")
-              }
-              style={{
-                ...styles.tab,
-                ...(activeTab === "withdrawals"
-                  ? styles.tabActive
-                  : {}),
-              }}
-            >
-              Withdrawals
-              {pendingWithdrawals.length > 0 && (
-                <span style={styles.tabBadge}>
-                  {pendingWithdrawals.length}
-                </span>
+              {x[0].toUpperCase() + x.slice(1)}
+              {x === "withdrawals" && pending.length > 0 && (
+                <i>{pending.length}</i>
               )}
             </button>
-          </nav>
+          ))}
+        </nav>
 
-          {message && (
-            <div style={styles.successMessage}>
-              ✓ {message}
-            </div>
-          )}
+        {msg && (
+          <div style={S.msg} onClick={() => setMsg("")}>
+            {msg}
+          </div>
+        )}
 
-          {errorMessage && (
-            <div style={styles.errorMessage}>
-              {errorMessage}
-            </div>
-          )}
-
-          {activeTab === "overview" && (
-            <>
-              <section style={styles.heroCard}>
-                <div>
-                  <div style={styles.heroEyebrow}>
-                    AURACAMP CONTROL CENTER
-                  </div>
-
-                  <h1 style={styles.heroTitle}>
-                    Manage your platform
-                  </h1>
-
-                  <p style={styles.heroText}>
-                    
-                    Campaigns, withdrawals and
-                    platform operations in one place.
-                  </p>
-                </div>
-
-                <div style={styles.heroIcon}>
-                  ⚡
-                </div>
-              </section>
-
-              <section style={styles.statsGrid}>
-                <StatCard
-                  icon="📦"
-                  title="Total Campaigns"
-                  value={String(campaigns.length)}
-                  subtitle="All campaigns"
-                />
-
-                <StatCard
-                  icon="🟢"
-                  title="Active Campaigns"
-                  value={String(activeCampaigns)}
-                  subtitle="Currently live"
-                />
-
-                <StatCard
-                  icon="⏸️"
-                  title="Paused"
-                  value={String(pausedCampaigns)}
-                  subtitle="Currently paused"
-                />
-
-                <StatCard
-                  icon="💸"
-                  title="Pending Withdrawals"
-                  value={`₹${pendingWithdrawalAmount.toFixed(
-                    2
-                  )}`}
-                  subtitle={`${pendingWithdrawals.length} request${
-                    pendingWithdrawals.length === 1
-                      ? ""
-                      : "s"
-                  }`}
-                />
-              </section>
-
-              <section style={styles.card}>
-                <div style={styles.sectionHeader}>
-                  <div>
-                    <h2 style={styles.sectionTitle}>
-                      Quick Actions
-                    </h2>
-
-                    <p style={styles.sectionDescription}>
-                      Frequently used admin controls.
-                    </p>
-                  </div>
-                </div>
-
-                <div style={styles.quickGrid}>
-                  <button
-                    type="button"
-                    onClick={openCreateCampaign}
-                    style={styles.quickAction}
-                  >
-                    <span style={styles.quickIcon}>
-                      ➕
-                    </span>
-
-                    <span>
-                      <strong>
-                        Create Campaign
-                      </strong>
-
-                      <small>
-                        Add a new AURACAMP offer
-                      </small>
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setActiveTab("campaigns")
-                    }
-                    style={styles.quickAction}
-                  >
-                    <span style={styles.quickIcon}>
-                      📋
-                    </span>
-
-                    <span>
-                      <strong>
-                        Manage Campaigns
-                      </strong>
-
-                      <small>
-                        Edit, pause or activate offers
-                      </small>
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setActiveTab("withdrawals")
-                    }
-                    style={styles.quickAction}
-                  >
-                    <span style={styles.quickIcon}>
-                      💰
-                    </span>
-
-                    <span>
-                      <strong>
-                        Withdrawals
-                      </strong>
-
-                      <small>
-                        Review pending requests
-                      </small>
-                    </span>
-                  </button>
-                </div>
-              </section>
-
-              <section style={styles.card}>
-                <div style={styles.sectionHeader}>
-                  <div>
-                    <h2 style={styles.sectionTitle}>
-                      Platform Summary
-                    </h2>
-
-                    <p style={styles.sectionDescription}>
-                      Current campaign statistics.
-                    </p>
-                  </div>
-                </div>
-
-                <div style={styles.summaryGrid}>
-                  <div style={styles.summaryItem}>
-                    <span>
-                      Total reward value
-                    </span>
-
-                    <strong>
-                      ₹
-                      {totalCampaignRewards.toFixed(
-                        2
-                      )}
-                    </strong>
-                  </div>
-
-                  <div style={styles.summaryItem}>
-                    <span>
-                      Pending withdrawals
-                    </span>
-
-                    <strong>
-                      {pendingWithdrawals.length}
-                    </strong>
-                  </div>
-
-                  <div style={styles.summaryItem}>
-                    <span>
-                      Withdrawal amount
-                    </span>
-
-                    <strong>
-                      ₹
-                      {pendingWithdrawalAmount.toFixed(
-                        2
-                      )}
-                    </strong>
-                  </div>
-                </div>
-              </section>
-            </>
-          )}
-
-          {activeTab === "campaigns" && (
-            <section style={styles.card}>
-              <div style={styles.sectionHeader}>
-                <div>
-                  <h2 style={styles.sectionTitle}>
-                    Campaign Management
-                  </h2>
-
-                  <p style={styles.sectionDescription}>
-                    Create and control your own
-                    AURACAMP offers.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (showCampaignForm) {
-                      resetForm();
-                    } else {
-                      openCreateCampaign();
-                    }
-                  }}
-                  style={styles.primaryButton}
-                >
-                  {showCampaignForm
-                    ? "Close"
-                    : "+ Create Campaign"}
-                </button>
+        {tab === "overview" && (
+          <>
+            <section style={S.hero}>
+              <div>
+                <small>AURACAMP CONTROL CENTER</small>
+                <h1>Platform Operations</h1>
+                <p>Manage campaigns and withdrawals.</p>
               </div>
-
-              {showCampaignForm && (
-                <form
-                  onSubmit={saveCampaign}
-                  style={styles.form}
-                >
-                  <div style={styles.formHeader}>
-                    <div>
-                      <h3 style={styles.formTitle}>
-                        {editingCampaign
-                          ? "Edit Campaign"
-                          : "Create New Campaign"}
-                      </h3>
-
-                      <p style={styles.formDescription}>
-                        {editingCampaign
-                          ? "Update campaign details."
-                          : "Add a new offer to AURACAMP."}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div style={styles.formGrid}>
-                    <Input
-                      label="Campaign Name *"
-                      value={form.name}
-                      onChange={(value) =>
-                        updateForm("name", value)
-                      }
-                      placeholder="Example: Earn ₹100"
-                    />
-
-                    <Input
-                      label="Category"
-                      value={form.category}
-                      onChange={(value) =>
-                        updateForm(
-                          "category",
-                          value
-                        )
-                      }
-                      placeholder="Entertainment"
-                    />
-
-                    <Input
-                      label="Landing URL *"
-                      value={form.landing_url}
-                      onChange={(value) =>
-                        updateForm(
-                          "landing_url",
-                          value
-                        )
-                      }
-                      placeholder="https://example.com/offer"
-                    />
-
-                    <Input
-                      label="Image URL"
-                      value={form.image_url}
-                      onChange={(value) =>
-                        updateForm(
-                          "image_url",
-                          value
-                        )
-                      }
-                      placeholder="https://..."
-                    />
-
-                    <Input
-                      label="Advertiser Payout ₹"
-                      type="number"
-                      value={
-                        form.advertiser_payout
-                      }
-                      onChange={(value) =>
-                        updateForm(
-                          "advertiser_payout",
-                          value
-                        )
-                      }
-                      placeholder="100"
-                    />
-
-                    <Input
-                      label="User Reward ₹"
-                      type="number"
-                      value={form.reward}
-                      onChange={(value) =>
-                        updateForm("reward", value)
-                      }
-                      placeholder="70"
-                    />
-
-                    <Input
-                      label="Conversion Type"
-                      value={
-                        form.conversion_type
-                      }
-                      onChange={(value) =>
-                        updateForm(
-                          "conversion_type",
-                          value
-                        )
-                      }
-                      placeholder="Complete Registration"
-                    />
-
-                    <Input
-                      label="Daily Limit"
-                      type="number"
-                      value={
-                        form.daily_limit
-                      }
-                      onChange={(value) =>
-                        updateForm(
-                          "daily_limit",
-                          value
-                        )
-                      }
-                      placeholder="100"
-                    />
-
-                    <Input
-                      label="Total Limit"
-                      type="number"
-                      value={
-                        form.total_limit
-                      }
-                      onChange={(value) =>
-                        updateForm(
-                          "total_limit",
-                          value
-                        )
-                      }
-                      placeholder="1000"
-                    />
-                  </div>
-
-                  <Textarea
-                    label="Description"
-                    value={form.description}
-                    onChange={(value) =>
-                      updateForm(
-                        "description",
-                        value
-                      )
-                    }
-                    placeholder="Describe this campaign..."
-                  />
-
-                  <Textarea
-                    label="Terms & Conditions"
-                    value={form.terms}
-                    onChange={(value) =>
-                      updateForm("terms", value)
-                    }
-                    placeholder="Campaign rules..."
-                  />
-
-                  <div style={styles.profitBox}>
-                    <div>
-                      <span
-                        style={
-                          styles.profitLabel
-                        }
-                      >
-                        AURACAMP Margin
-                      </span>
-
-                      <small
-                        style={
-                          styles.profitHint
-                        }
-                      >
-                        Advertiser payout minus
-                        user reward
-                      </small>
-                    </div>
-
-                    <strong
-                      style={
-                        styles.profitValue
-                      }
-                    >
-                      ₹
-                      {Math.max(
-                        0,
-                        Number(
-                          form.advertiser_payout ||
-                            0
-                        ) -
-                          Number(
-                            form.reward || 0
-                          )
-                      ).toFixed(2)}
-                    </strong>
-                  </div>
-
-                  <div style={styles.formActions}>
-                    <button
-                      type="button"
-                      onClick={resetForm}
-                      style={styles.secondaryButton}
-                    >
-                      Cancel
-                    </button>
-
-                    <button
-                      type="submit"
-                      disabled={saving}
-                      style={{
-                        ...styles.primaryButton,
-                        opacity: saving ? 0.6 : 1,
-                      }}
-                    >
-                      {saving
-                        ? "Saving..."
-                        : editingCampaign
-                        ? "Update Campaign"
-                        : "Create Campaign"}
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              <div style={styles.list}>
-                {campaigns.length === 0 ? (
-                  <EmptyState
-                    icon="📦"
-                    title="No campaigns yet"
-                    text="Create your first campaign from above."
-                  />
-                ) : (
-                  campaigns.map((campaign) => (
-                    <div
-                      key={campaign.id}
-                      style={styles.campaignCard}
-                    >
-                      <div
-                        style={
-                          styles.campaignMain
-                        }
-                      >
-                        {campaign.image_url ? (
-                          <img
-                            src={
-                              campaign.image_url
-                            }
-                            alt=""
-                            style={
-                              styles.campaignImage
-                            }
-                            onError={(event) => {
-                              event.currentTarget.style.display =
-                                "none";
-                            }}
-                          />
-                        ) : (
-                          <div
-                            style={
-                              styles.campaignImageFallback
-                            }
-                          >
-                            ⚡
-                          </div>
-                        )}
-
-                        <div
-                          style={
-                            styles.campaignInfo
-                          }
-                        >
-                          <div
-                            style={
-                              styles.campaignTitleRow
-                            }
-                          >
-                            <h3
-                              style={
-                                styles.campaignName
-                              }
-                            >
-                              {campaign.name}
-                            </h3>
-
-                            <span
-                              style={campaignStatusStyle(
-                                campaign.status
-                              )}
-                            >
-                              {campaign.status}
-                            </span>
-                          </div>
-
-                          <div
-                            style={
-                              styles.campaignMeta
-                            }
-                          >
-                            {campaign.category ||
-                              "Other"}
-                            {" • "}
-                            Reward ₹
-                            {Number(
-                              campaign.reward
-                            ).toFixed(2)}
-                            {" • "}
-                            Payout ₹
-                            {Number(
-                              campaign.advertiser_payout
-                            ).toFixed(2)}
-                          </div>
-
-                          <div
-                            style={
-                              styles.campaignMeta
-                            }
-                          >
-                            Conversions:{" "}
-                            {campaign.conversions_count ||
-                              0}
-                          </div>
-
-                          {campaign.description && (
-                            <p
-                              style={
-                                styles.campaignDescription
-                              }
-                            >
-                              {
-                                campaign.description
-                              }
-                            </p>
-                          )}
-                        </div>
-                      </div>
-
-                      <div
-                        style={
-                          styles.actionRow
-                        }
-                      >
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openEditCampaign(
-                              campaign
-                            )
-                          }
-                          style={
-                            styles.secondaryButton
-                          }
-                          disabled={
-                            actionId ===
-                            campaign.id
-                          }
-                        >
-                          Edit
-                        </button>
-
-                        {campaign.status ===
-                        "active" ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              changeCampaignStatus(
-                                campaign,
-                                "paused"
-                              )
-                            }
-                            style={
-                              styles.secondaryButton
-                            }
-                            disabled={
-                              actionId ===
-                              campaign.id
-                            }
-                          >
-                            Pause
-                          </button>
-                        ) : campaign.status ===
-                          "paused" ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              changeCampaignStatus(
-                                campaign,
-                                "active"
-                              )
-                            }
-                            style={
-                              styles.secondaryButton
-                            }
-                            disabled={
-                              actionId ===
-                              campaign.id
-                            }
-                          >
-                            Activate
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              changeCampaignStatus(
-                                campaign,
-                                "active"
-                              )
-                            }
-                            style={
-                              styles.secondaryButton
-                            }
-                            disabled={
-                              actionId ===
-                              campaign.id
-                            }
-                          >
-                            Reactivate
-                          </button>
-                        )}
-
-                        {campaign.status !==
-                          "ended" && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              changeCampaignStatus(
-                                campaign,
-                                "ended"
-                              )
-                            }
-                            style={
-                              styles.warningButton
-                            }
-                            disabled={
-                              actionId ===
-                              campaign.id
-                            }
-                          >
-                            End
-                          </button>
-                        )}
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            deleteCampaign(
-                              campaign
-                            )
-                          }
-                          style={
-                            styles.dangerButton
-                          }
-                          disabled={
-                            actionId ===
-                            campaign.id
-                          }
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
+              <strong style={{ fontSize: 45 }}>⚡</strong>
             </section>
-          )}
 
-          {activeTab === "withdrawals" && (
-            <section style={styles.card}>
-              <div style={styles.sectionHeader}>
-                <div>
-                  <h2 style={styles.sectionTitle}>
-                    Withdrawal Management
-                  </h2>
+            <div style={S.grid}>
+              <Stat title="Campaigns" value={campaigns.length} icon="📦" />
+              <Stat title="Active" value={active} icon="🟢" />
+              <Stat title="Pending Requests" value={pending.length} icon="💸" />
+              <Stat title="Pending Amount" value={`₹${pendingAmount}`} icon="💰" />
+            </div>
+          </>
+        )}
 
-                  <p style={styles.sectionDescription}>
-                    Review and process user
-                    withdrawal requests.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={loadWithdrawals}
-                  style={styles.secondaryButton}
-                >
-                  ↻ Refresh
-                </button>
+        {tab === "campaigns" && (
+          <section style={S.card}>
+            <div style={S.row}>
+              <div>
+                <h2>Campaigns</h2>
+                <small>Create and manage offers.</small>
               </div>
+              <button onClick={() => show ? setShow(false) : createCampaign()} style={S.darkBtn}>
+                {show ? "Close" : "+ Create"}
+              </button>
+            </div>
 
-              <div style={styles.withdrawalStats}>
-                <div style={styles.withdrawalStat}>
-                  <span>Pending</span>
-                  <strong>
-                    {pendingWithdrawals.length}
-                  </strong>
+            {show && (
+              <form onSubmit={save} style={S.form}>
+                <div style={S.formGrid}>
+                  {[
+                    ["name", "Campaign Name"],
+                    ["category", "Category"],
+                    ["landing_url", "Landing URL"],
+                    ["image_url", "Image URL"],
+                    ["advertiser_payout", "Advertiser Payout"],
+                    ["reward", "User Reward"],
+                    ["conversion_type", "Conversion Type"],
+                    ["daily_limit", "Daily Limit"],
+                    ["total_limit", "Total Limit"],
+                  ].map(([key, label]) => (
+                    <label key={key}>
+                      {label}
+                      <input
+                        value={form[key]}
+                        onChange={(e) => set(key, e.target.value)}
+                        placeholder={label}
+                        type={
+                          key.includes("payout") ||
+                          key === "reward" ||
+                          key.includes("limit")
+                            ? "number"
+                            : "text"
+                        }
+                      />
+                    </label>
+                  ))}
                 </div>
 
-                <div style={styles.withdrawalStat}>
-                  <span>Pending Amount</span>
-                  <strong>
-                    ₹
-                    {pendingWithdrawalAmount.toFixed(
-                      2
-                    )}
-                  </strong>
-                </div>
-
-                <div style={styles.withdrawalStat}>
-                  <span>Total Requests</span>
-                  <strong>
-                    {withdrawals.length}
-                  </strong>
-                </div>
-              </div>
-
-              <div style={styles.list}>
-                {withdrawals.length === 0 ? (
-                  <EmptyState
-                    icon="💸"
-                    title="No withdrawals"
-                    text="Withdrawal requests will appear here."
-                  />
-                ) : (
-                  withdrawals.map(
-                    (withdrawal) => {
-                      const profile =
-                        profiles[
-                          withdrawal.user_id
-                        ];
-
-                      return (
-                        <div
-                          key={
-                            withdrawal.id
-                          }
-                          style={
-                            styles.withdrawalCard
-                          }
-                        >
-                          <div
-                            style={
-                              styles.withdrawalTop
-                            }
-                          >
-                            <div>
-                              <div
-                                style={
-                                  styles.withdrawalAmount
-                                }
-                              >
-                                ₹
-                                {Number(
-                                  withdrawal.amount
-                                ).toFixed(2)}
-                              </div>
-
-                              <div
-                                style={
-                                  styles.withdrawalUser
-                                }
-                              >
-                                {getUserName(
-                                  withdrawal.user_id
-                                )}
-                              </div>
-
-                              <div
-                                style={
-                                  styles.withdrawalEmail
-                                }
-                              >
-                                {getUserEmail(
-                                  withdrawal.user_id
-                                )}
-                              </div>
-                            </div>
-
-                            <span
-                              style={withdrawalStatusStyle(
-                                withdrawal.status
-                              )}
-                            >
-                              {
-                                withdrawal.status
-                              }
-                            </span>
-                          </div>
-
-                          <div
-                            style={
-                              styles.paymentBox
-                            }
-                          >
-                            <div
-                              style={
-                                styles.paymentTitle
-                              }
-                            >
-                              {withdrawal.method ===
-                              "upi"
-                                ? "📱 UPI Payment"
-                                : "🏦 Bank Payment"}
-                            </div>
-
-                            <div
-                              style={
-                                styles.paymentGrid
-                              }
-                            >
-                              <PaymentField
-                                label="Account Name"
-                                value={
-                                  withdrawal.account_name ||
-                                  "-"
-                                }
-                              />
-
-                              {withdrawal.method ===
-                              "upi" ? (
-                                <PaymentField
-                                  label="UPI ID"
-                                  value={
-                                    withdrawal.upi_id ||
-                                    "-"
-                                  }
-                                />
-                              ) : (
-                                <>
-                                  <PaymentField
-                                    label="Bank"
-                                    value={
-                                      withdrawal.bank_name ||
-                                      "-"
-                                    }
-                                  />
-
-                                  <PaymentField
-                                    label="Account Number"
-                                    value={
-                                      withdrawal.account_number
-                                        ? `••••${withdrawal.account_number.slice(
-                                            -4
-                                          )}`
-                                        : "-"
-                                    }
-                                  />
-
-                                  <PaymentField
-                                    label="IFSC"
-                                    value={
-                                      withdrawal.ifsc_code ||
-                                      "-"
-                                    }
-                                  />
-                                </>
-                              )}
-                            </div>
-                          </div>
-
-                          <div
-                            style={
-                              styles.withdrawalFooter
-                            }
-                          >
-                            <span
-                              style={
-                                styles.withdrawalDate
-                              }
-                            >
-                              {formatDate(
-                                withdrawal.created_at
-                              )}
-                            </span>
-
-                            {withdrawal.status ===
-                              "pending" && (
-                              <div
-                                style={
-                                  styles.actionRow
-                                }
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    openWithdrawalAction(
-                                      withdrawal,
-                                      "reject"
-                                    )
-                                  }
-                                  style={
-                                    styles.dangerButton
-                                  }
-                                  disabled={
-                                    actionId ===
-                                    withdrawal.id
-                                  }
-                                >
-                                  Reject
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    openWithdrawalAction(
-                                      withdrawal,
-                                      "approve"
-                                    )
-                                  }
-                                  style={
-                                    styles.successButton
-                                  }
-                                  disabled={
-                                    actionId ===
-                                    withdrawal.id
-                                  }
-                                >
-                                  Approve
-                                </button>
-                              </div>
-                            )}
-                          </div>
-
-                          {withdrawal.status ===
-                            "rejected" &&
-                            withdrawal.rejection_reason && (
-                              <div
-                                style={
-                                  styles.rejectionBox
-                                }
-                              >
-                                <strong>
-                                  Rejection reason:
-                                </strong>{" "}
-                                {
-                                  withdrawal.rejection_reason
-                                }
-                              </div>
-                            )}
-
-                          {profile && (
-                            <div
-                              style={
-                                styles.userBalance
-                              }
-                            >
-                              User wallet:
-                              {" "}
-                              <strong>
-                                ₹
-                                {Number(
-                                  profile.wallet_balance ||
-                                    0
-                                ).toFixed(2)}
-                              </strong>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    }
-                  )
-                )}
-              </div>
-            </section>
-          )}
-                  </div>
-
-        {selectedWithdrawal &&
-          withdrawalAction && (
-            <div
-              style={styles.modalOverlay}
-              onClick={closeWithdrawalAction}
-            >
-              <div
-                style={styles.modalCard}
-                onClick={(event) =>
-                  event.stopPropagation()
-                }
-              >
-                <div style={styles.modalHeader}>
-                  <div>
-                    <div style={styles.modalEyebrow}>
-                      WITHDRAWAL ACTION
-                    </div>
-
-                    <h3 style={styles.modalTitle}>
-                      {withdrawalAction === "approve"
-                        ? "Approve Withdrawal"
-                        : "Reject Withdrawal"}
-                    </h3>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={closeWithdrawalAction}
-                    style={styles.closeButton}
-                  >
-                    ×
-                  </button>
-                </div>
-
-                <div style={styles.modalSummary}>
-                  <div>
-                    <span>User</span>
-                    <strong>
-                      {getUserName(
-                        selectedWithdrawal.user_id
-                      )}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>Amount</span>
-                    <strong>
-                      ₹
-                      {Number(
-                        selectedWithdrawal.amount
-                      ).toFixed(2)}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>Method</span>
-                    <strong>
-                      {selectedWithdrawal.method.toUpperCase()}
-                    </strong>
-                  </div>
-                </div>
-
-                <label style={styles.label}>
-                  {withdrawalAction === "approve"
-                    ? "Admin Note"
-                    : "Rejection Reason *"}
-
+                <label>
+                  Description
                   <textarea
-                    value={withdrawalNote}
-                    onChange={(event) =>
-                      setWithdrawalNote(
-                        event.target.value
-                      )
-                    }
-                    placeholder={
-                      withdrawalAction === "approve"
-                        ? "Optional note..."
-                        : "Enter reason for rejection..."
-                    }
-                    rows={4}
-                    style={styles.textarea}
+                    value={form.description}
+                    onChange={(e) => set("description", e.target.value)}
                   />
                 </label>
 
-                {withdrawalAction === "reject" && (
-                  <div style={styles.warningBox}>
-                    The existing database RPC should refund
-                    the rejected withdrawal amount to the
-                    user's wallet.
+                <label>
+                  Terms
+                  <textarea
+                    value={form.terms}
+                    onChange={(e) => set("terms", e.target.value)}
+                  />
+                </label>
+
+                <button style={S.darkBtn}>
+                  {edit ? "Update Campaign" : "Create Campaign"}
+                </button>
+              </form>
+            )}
+
+            <div style={S.list}>
+              {campaigns.map((c) => (
+                <div key={c.id} style={S.item}>
+                  <div>
+                    <b>{c.name}</b>
+                    <small>
+                      {c.category} • Reward ₹{c.reward} • Payout ₹
+                      {c.advertiser_payout}
+                    </small>
+                    <span style={S.badge}>{c.status}</span>
                   </div>
-                )}
 
-                <div style={styles.modalActions}>
-                  <button
-                    type="button"
-                    onClick={closeWithdrawalAction}
-                    style={styles.secondaryButton}
-                  >
-                    Cancel
-                  </button>
+                  <div style={S.actions}>
+                    <button onClick={() => editCampaign(c)}>Edit</button>
 
-                  <button
-                    type="button"
-                    onClick={processWithdrawal}
-                    disabled={
-                      actionId === selectedWithdrawal.id
-                    }
-                    style={{
-                      ...(withdrawalAction === "approve"
-                        ? styles.successButton
-                        : styles.dangerButton),
-                      opacity:
-                        actionId === selectedWithdrawal.id
-                          ? 0.6
-                          : 1,
-                    }}
-                  >
-                    {actionId === selectedWithdrawal.id
-                      ? "Processing..."
-                      : withdrawalAction === "approve"
-                      ? "Approve Withdrawal"
-                      : "Reject Withdrawal"}
-                  </button>
+                    <button
+                      onClick={() =>
+                        status(
+                          c.id,
+                          c.status === "active" ? "paused" : "active"
+                        )
+                      }
+                    >
+                      {c.status === "active" ? "Pause" : "Activate"}
+                    </button>
+
+                    <button onClick={() => remove(c.id)}>Delete</button>
+                  </div>
                 </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {tab === "withdrawals" && (
+          <section style={S.card}>
+            <div style={S.row}>
+              <div>
+                <h2>Withdrawals</h2>
+                <small>Review user withdrawal requests.</small>
+              </div>
+              <button onClick={loadWithdrawals} style={S.darkBtn}>
+                Refresh
+              </button>
+            </div>
+
+            <div style={S.list}>
+              {withdrawals.map((w) => (
+                <div key={w.id} style={S.item}>
+                  <div>
+                    <b>₹{Number(w.amount).toFixed(2)}</b>
+                    <small>
+                      {w.method?.toUpperCase()} • {w.account_name || "User"}
+                    </small>
+
+                    {w.method === "upi" ? (
+                      <small>UPI: {w.upi_id || "-"}</small>
+                    ) : (
+                      <small>
+                        {w.bank_name || "-"} ••••{w.account_number?.slice(-4)}
+                        {" "}• {w.ifsc_code || "-"}
+                      </small>
+                    )}
+
+                    <span style={S.badge}>{w.status}</span>
+                  </div>
+
+                  {w.status === "pending" && (
+                    <div style={S.actions}>
+                      <button
+                        onClick={() => {
+                          setSelected(w);
+                          setAction("reject");
+                        }}
+                      >
+                        Reject
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setSelected(w);
+                          setAction("approve");
+                        }}
+                      >
+                        Approve
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {selected && (
+          <div style={S.modal}>
+            <div style={S.modalBox}>
+              <h2>
+                {action === "approve"
+                  ? "Approve Withdrawal"
+                  : "Reject Withdrawal"}
+              </h2>
+
+              <p>
+                Amount: <b>₹{selected.amount}</b>
+              </p>
+
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder={
+                  action === "approve"
+                    ? "Optional admin note"
+                    : "Rejection reason"
+                }
+              />
+
+              <div style={S.actions}>
+                <button onClick={() => setSelected(null)}>
+                  Cancel
+                </button>
+
+                <button onClick={processWithdrawal} style={S.darkBtn}>
+                  Confirm
+                </button>
               </div>
             </div>
-          )}
-      </main>
-    </>
-  );
-}
-
-function Input({
-  label,
-  value,
-  onChange,
-  placeholder,
-  type = "text",
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  type?: string;
-}) {
-  return (
-    <label style={styles.label}>
-      {label}
-
-      <input
-        type={type}
-        value={value}
-        onChange={(event) =>
-          onChange(event.target.value)
-        }
-        placeholder={placeholder}
-        style={styles.input}
-      />
-    </label>
-  );
-}
-
-function Textarea({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-}) {
-  return (
-    <label style={styles.label}>
-      {label}
-
-      <textarea
-        value={value}
-        onChange={(event) =>
-          onChange(event.target.value)
-        }
-        placeholder={placeholder}
-        rows={4}
-        style={styles.textarea}
-      />
-    </label>
-  );
-}
-
-function StatCard({
-  icon,
-  title,
-  value,
-  subtitle,
-}: {
-  icon: string;
-  title: string;
-  value: string;
-  subtitle: string;
-}) {
-  return (
-    <div style={styles.statCard}>
-      <div style={styles.statIcon}>{icon}</div>
-
-      <div style={styles.statContent}>
-        <span style={styles.statTitle}>
-          {title}
-        </span>
-
-        <strong style={styles.statNumber}>
-          {value}
-        </strong>
-
-        <small style={styles.statSubtitle}>
-          {subtitle}
-        </small>
+          </div>
+        )}
       </div>
-    </div>
+    </main>
   );
 }
 
-function EmptyState({
-  icon,
+function Stat({
   title,
-  text,
-}: {
-  icon: string;
-  title: string;
-  text: string;
-}) {
-  return (
-    <div style={styles.emptyState}>
-      <div style={styles.emptyIcon}>{icon}</div>
-
-      <h3 style={styles.emptyTitle}>{title}</h3>
-
-      <p style={styles.emptyText}>{text}</p>
-    </div>
-  );
-}
-
-function PaymentField({
-  label,
   value,
+  icon,
 }: {
-  label: string;
-  value: string;
+  title: string;
+  value: any;
+  icon: string;
 }) {
   return (
-    <div style={styles.paymentField}>
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <div style={S.stat}>
+      <span>{icon}</span>
+      <small>{title}</small>
+      <b>{value}</b>
     </div>
   );
 }
 
-const styles: Record<string, CSSProperties> = {  page: {
+const S: any = {
+  page: {
     minHeight: "100vh",
-    background:
-      "linear-gradient(145deg, #f7f9fc 0%, #eef3ff 50%, #f9f7ff 100%)",
+    background: "#f5f7fb",
+    padding: 15,
+    fontFamily: "system-ui,sans-serif",
     color: "#111827",
-    fontFamily:
-      "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    padding: "18px 14px 50px",
-    boxSizing: "border-box",
   },
-
-  container: {
-    width: "100%",
-    maxWidth: 1180,
-    margin: "0 auto",
+  wrap: {
+    maxWidth: 1100,
+    margin: "auto",
   },
-
-  loadingCard: {
-    width: "min(420px, calc(100% - 30px))",
-    minHeight: 280,
-    margin: "120px auto 0",
-    background: "#ffffff",
-    borderRadius: 24,
+  center: {
+    minHeight: "100vh",
+    display: "grid",
+    placeItems: "center",
+    fontFamily: "system-ui",
+  },
+  header: {
+    background: "#111827",
+    color: "white",
+    padding: 20,
+    borderRadius: 18,
     display: "flex",
-    flexDirection: "column",
+    justifyContent: "space-between",
     alignItems: "center",
-    justifyContent: "center",
-    boxShadow:
-      "0 20px 60px rgba(17,24,39,0.08)",
   },
-
-  spinner: {
-    width: 38,
-    height: 38,
-    borderRadius: "50%",
-    border: "4px solid #e5e7eb",
-    borderTopColor: "#111827",
-    animation: "spin 0.8s linear infinite",
-    marginBottom: 18,
-  },
-
-  loadingTitle: {
-    fontSize: 22,
-    fontWeight: 800,
+  logo: {
+    fontSize: 25,
     letterSpacing: 1,
   },
-
-  loadingText: {
-    marginTop: 6,
-    color: "#6b7280",
-    fontSize: 14,
-  },
-
-  deniedCard: {
-    width: "min(440px, calc(100% - 30px))",
-    margin: "100px auto",
-    background: "#ffffff",
-    borderRadius: 24,
-    padding: 38,
-    textAlign: "center",
-    boxShadow:
-      "0 20px 60px rgba(17,24,39,0.08)",
-    boxSizing: "border-box",
-  },
-
-  deniedIcon: {
-    fontSize: 52,
-    marginBottom: 14,
-  },
-
-  deniedTitle: {
-    margin: "0 0 8px",
-    fontSize: 25,
-  },
-
-  deniedText: {
-    margin: "0 0 22px",
-    color: "#6b7280",
-    lineHeight: 1.6,
-  },
-
-  header: {
-    background:
-      "linear-gradient(135deg, #111827, #1f2937)",
-    color: "#ffffff",
-    borderRadius: 22,
-    padding: "22px 24px",
+  nav: {
     display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 15,
-    boxShadow:
-      "0 18px 45px rgba(17,24,39,0.15)",
-  },
-
-  brand: {
-    fontSize: 27,
-    fontWeight: 900,
-    letterSpacing: 1.2,
-  },
-
-  adminLabel: {
-    marginTop: 4,
-    fontSize: 10,
-    letterSpacing: 2,
-    opacity: 0.6,
-    fontWeight: 700,
-  },
-
-  logoutButton: {
-    border: "0",
-    borderRadius: 11,
-    padding: "10px 16px",
-    background: "#ffffff",
-    color: "#111827",
-    fontWeight: 800,
-    cursor: "pointer",
-  },
-
-  tabs: {
-    display: "flex",
-    gap: 8,
-    margin: "16px 0",
+    gap: 6,
+    margin: "14px 0",
+    background: "white",
     padding: 5,
-    background: "rgba(255,255,255,0.8)",
-    border: "1px solid #e5e7eb",
-    borderRadius: 14,
-    overflowX: "auto",
+    borderRadius: 12,
   },
-
   tab: {
     border: 0,
     background: "transparent",
-    color: "#6b7280",
-    borderRadius: 10,
-    padding: "10px 15px",
-    fontWeight: 800,
+    padding: "10px 14px",
+    borderRadius: 9,
     cursor: "pointer",
-    whiteSpace: "nowrap",
-    display: "flex",
-    alignItems: "center",
-    gap: 7,
+    fontWeight: 700,
   },
-
-  tabActive: {
+  tabOn: {
     background: "#111827",
-    color: "#ffffff",
+    color: "white",
   },
-
-  tabBadge: {
-    minWidth: 20,
-    height: 20,
-    padding: "0 5px",
-    borderRadius: 20,
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "#ef4444",
-    color: "#ffffff",
-    fontSize: 10,
-    fontWeight: 900,
-  },
-
-  successMessage: {
-    background: "#ecfdf5",
-    border: "1px solid #a7f3d0",
-    color: "#047857",
-    padding: "12px 14px",
-    borderRadius: 12,
-    marginBottom: 14,
-    fontSize: 14,
-    fontWeight: 700,
-  },
-
-  errorMessage: {
-    background: "#fef2f2",
-    border: "1px solid #fecaca",
-    color: "#b91c1c",
-    padding: "12px 14px",
-    borderRadius: 12,
-    marginBottom: 14,
-    fontSize: 14,
-    fontWeight: 700,
-  },
-
-  heroCard: {
-    background:
-      "linear-gradient(135deg, #111827 0%, #273449 100%)",
-    color: "#ffffff",
-    borderRadius: 22,
-    padding: "28px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 20,
-    marginBottom: 16,
-    overflow: "hidden",
-    position: "relative",
-  },
-
-  heroEyebrow: {
-    fontSize: 10,
-    letterSpacing: 2,
-    opacity: 0.6,
-    fontWeight: 800,
-    marginBottom: 8,
-  },
-
-  heroTitle: {
-    margin: 0,
-    fontSize: "clamp(25px, 5vw, 38px)",
-    lineHeight: 1.1,
-  },
-
-  heroText: {
-    margin: "10px 0 0",
-    maxWidth: 620,
-    color: "#d1d5db",
-    lineHeight: 1.6,
-  },
-
-  heroIcon: {
-    width: 82,
-    height: 82,
-    borderRadius: 22,
-    background: "rgba(255,255,255,0.08)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: 38,
-    flexShrink: 0,
-  },
-
-  statsGrid: {
-    display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit, minmax(210px, 1fr))",
-    gap: 14,
-    marginBottom: 16,
-  },
-
-  statCard: {
-    background: "#ffffff",
+  hero: {
+    background: "#111827",
+    color: "white",
+    padding: 25,
     borderRadius: 18,
-    padding: 19,
     display: "flex",
-    alignItems: "center",
-    gap: 14,
-    border: "1px solid #e5e7eb",
-    boxShadow:
-      "0 8px 25px rgba(17,24,39,0.04)",
-  },
-
-  statIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    background: "#f3f4f6",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: 23,
-    flexShrink: 0,
-  },
-
-  statContent: {
-    minWidth: 0,
-  },
-
-  statTitle: {
-    display: "block",
-    color: "#6b7280",
-    fontSize: 12,
-    fontWeight: 700,
-  },
-
-  statNumber: {
-    display: "block",
-    marginTop: 3,
-    fontSize: 25,
-    lineHeight: 1.1,
-  },
-
-  statSubtitle: {
-    display: "block",
-    marginTop: 5,
-    color: "#9ca3af",
-    fontSize: 11,
-  },
-
-  card: {
-    background: "#ffffff",
-    borderRadius: 20,
-    padding: 22,
-    marginBottom: 16,
-    border: "1px solid #e5e7eb",
-    boxShadow:
-      "0 8px 30px rgba(17,24,39,0.04)",
-  },
-
-  sectionHeader: {
-    display: "flex",
-    alignItems: "center",
     justifyContent: "space-between",
-    gap: 15,
-    marginBottom: 20,
+    alignItems: "center",
   },
-
-  sectionTitle: {
-    margin: 0,
-    fontSize: 21,
-  },
-
-  sectionDescription: {
-    margin: "5px 0 0",
-    color: "#6b7280",
-    fontSize: 13,
-    lineHeight: 1.5,
-  },
-
-  primaryButton: {
-    border: 0,
-    borderRadius: 11,
-    background: "#111827",
-    color: "#ffffff",
-    padding: "11px 16px",
-    fontWeight: 800,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  },
-
-  secondaryButton: {
-    border: "1px solid #e5e7eb",
-    borderRadius: 10,
-    background: "#f9fafb",
-    color: "#111827",
-    padding: "9px 13px",
-    fontWeight: 750,
-    cursor: "pointer",
-  },
-
-  dangerButton: {
-    border: 0,
-    borderRadius: 10,
-    background: "#fee2e2",
-    color: "#b91c1c",
-    padding: "9px 13px",
-    fontWeight: 800,
-    cursor: "pointer",
-  },
-
-  warningButton: {
-    border: 0,
-    borderRadius: 10,
-    background: "#fef3c7",
-    color: "#92400e",
-    padding: "9px 13px",
-    fontWeight: 800,
-    cursor: "pointer",
-  },
-
-  successButton: {
-    border: 0,
-    borderRadius: 10,
-    background: "#dcfce7",
-    color: "#166534",
-    padding: "9px 13px",
-    fontWeight: 800,
-    cursor: "pointer",
-  },
-
-  quickGrid: {
+  grid: {
     display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit, minmax(220px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
     gap: 12,
+    margin: "14px 0",
   },
-
-  quickAction: {
-    border: "1px solid #e5e7eb",
-    background: "#ffffff",
+  stat: {
+    background: "white",
+    padding: 18,
     borderRadius: 15,
-    padding: 15,
+    border: "1px solid #e5e7eb",
+  },
+  card: {
+    background: "white",
+    padding: 20,
+    borderRadius: 18,
+  },
+  row: {
     display: "flex",
+    justifyContent: "space-between",
     alignItems: "center",
-    gap: 12,
-    textAlign: "left",
-    cursor: "pointer",
+    gap: 10,
+    marginBottom: 18,
   },
-
-  quickIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    background: "#f3f4f6",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: 20,
-    flexShrink: 0,
-  },
-
-  summaryGrid: {
-    display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit, minmax(190px, 1fr))",
-    gap: 12,
-  },
-
-  summaryItem: {
-    padding: 15,
-    background: "#f9fafb",
-    borderRadius: 13,
-    display: "flex",
-    flexDirection: "column",
-    gap: 6,
-  },
-
   form: {
     background: "#f8fafc",
-    border: "1px solid #e5e7eb",
-    borderRadius: 17,
-    padding: 18,
-    marginBottom: 20,
+    padding: 15,
+    borderRadius: 14,
+    marginBottom: 18,
   },
-
-  formHeader: {
-    marginBottom: 17,
-  },
-
-  formTitle: {
-    margin: 0,
-    fontSize: 18,
-  },
-
-  formDescription: {
-    margin: "5px 0 0",
-    color: "#6b7280",
-    fontSize: 13,
-  },
-
   formGrid: {
     display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit, minmax(220px, 1fr))",
-    gap: 14,
+    gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))",
+    gap: 12,
   },
-
-  label: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 7,
-    marginBottom: 14,
-    fontSize: 12,
-    fontWeight: 800,
-    color: "#374151",
-  },
-
-  input: {
-    width: "100%",
-    boxSizing: "border-box",
-    border: "1px solid #d1d5db",
-    borderRadius: 10,
-    background: "#ffffff",
-    padding: "11px 12px",
-    fontSize: 14,
-    outline: "none",
-    color: "#111827",
-  },
-
-  textarea: {
-    width: "100%",
-    boxSizing: "border-box",
-    border: "1px solid #d1d5db",
-    borderRadius: 10,
-    background: "#ffffff",
-    padding: "11px 12px",
-    fontSize: 14,
-    outline: "none",
-    color: "#111827",
-    resize: "vertical",
-    fontFamily: "inherit",
-  },
-
-  profitBox: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 15,
-    background: "#ecfdf5",
-    border: "1px solid #a7f3d0",
-    borderRadius: 12,
-    padding: 14,
-    margin: "2px 0 16px",
-  },
-
-  profitLabel: {
-    display: "block",
-    color: "#065f46",
-    fontWeight: 800,
-  },
-
-  profitHint: {
-    display: "block",
-    color: "#047857",
-    marginTop: 3,
-  },
-
-  profitValue: {
-    color: "#047857",
-    fontSize: 20,
-  },
-
-  formActions: {
-    display: "flex",
-    justifyContent: "flex-end",
-    gap: 9,
-    flexWrap: "wrap",
-  },
-
   list: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-  },
-
-  campaignCard: {
-    border: "1px solid #e5e7eb",
-    borderRadius: 16,
-    padding: 15,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 15,
-    flexWrap: "wrap",
-  },
-
-  campaignMain: {
-    display: "flex",
-    alignItems: "center",
-    gap: 13,
-    flex: 1,
-    minWidth: 250,
-  },
-
-  campaignImage: {
-    width: 58,
-    height: 58,
-    borderRadius: 13,
-    objectFit: "cover",
-    background: "#f3f4f6",
-    flexShrink: 0,
-  },
-
-  campaignImageFallback: {
-    width: 58,
-    height: 58,
-    borderRadius: 13,
-    background: "#111827",
-    color: "#ffffff",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: 23,
-    flexShrink: 0,
-  },
-
-  campaignInfo: {
-    minWidth: 0,
-    flex: 1,
-  },
-
-  campaignTitleRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 9,
-    flexWrap: "wrap",
-  },
-
-  campaignName: {
-    margin: 0,
-    fontSize: 16,
-    wordBreak: "break-word",
-  },
-
-  campaignMeta: {
-    color: "#6b7280",
-    fontSize: 12,
-    marginTop: 5,
-  },
-
-  campaignDescription: {
-    margin: "7px 0 0",
-    color: "#6b7280",
-    fontSize: 12,
-    lineHeight: 1.5,
-  },
-
-  status: {
-    display: "inline-flex",
-    alignItems: "center",
-    borderRadius: 30,
-    padding: "4px 8px",
-    fontSize: 10,
-    fontWeight: 900,
-    textTransform: "uppercase",
-    whiteSpace: "nowrap",
-  },
-
-  statusSuccess: {
-    background: "#dcfce7",
-    color: "#166534",
-  },
-
-  statusDanger: {
-    background: "#fee2e2",
-    color: "#991b1b",
-  },
-
-  statusWarning: {
-    background: "#fef3c7",
-    color: "#92400e",
-  },
-
-  statusPending: {
-    background: "#e0e7ff",
-    color: "#3730a3",
-  },
-
-  actionRow: {
-    display: "flex",
-    gap: 7,
-    alignItems: "center",
-    flexWrap: "wrap",
-  },
-
-  emptyState: {
-    textAlign: "center",
-    padding: "50px 20px",
-    border: "1px dashed #d1d5db",
-    borderRadius: 15,
-  },
-
-  emptyIcon: {
-    fontSize: 40,
-  },
-
-  emptyTitle: {
-    margin: "10px 0 5px",
-    fontSize: 17,
-  },
-
-  emptyText: {
-    margin: 0,
-    color: "#6b7280",
-    fontSize: 13,
-  },
-
-  withdrawalStats: {
     display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit, minmax(170px, 1fr))",
     gap: 10,
-    marginBottom: 17,
   },
-
-  withdrawalStat: {
-    background: "#f9fafb",
-    borderRadius: 13,
+  item: {
+    border: "1px solid #e5e7eb",
     padding: 14,
+    borderRadius: 14,
     display: "flex",
-    flexDirection: "column",
-    gap: 5,
-  },
-
-  withdrawalCard: {
-    border: "1px solid #e5e7eb",
-    borderRadius: 16,
-    padding: 16,
-  },
-
-  withdrawalTop: {
-    display: "flex",
-    alignItems: "flex-start",
     justifyContent: "space-between",
-    gap: 12,
-  },
-
-  withdrawalAmount: {
-    fontSize: 23,
-    fontWeight: 900,
-  },
-
-  withdrawalUser: {
-    marginTop: 3,
-    fontSize: 14,
-    fontWeight: 800,
-  },
-
-  withdrawalEmail: {
-    marginTop: 2,
-    color: "#6b7280",
-    fontSize: 11,
-    wordBreak: "break-all",
-  },
-
-  paymentBox: {
-    marginTop: 14,
-    background: "#f9fafb",
-    borderRadius: 13,
-    padding: 13,
-  },
-
-  paymentTitle: {
-    fontWeight: 800,
-    fontSize: 13,
-    marginBottom: 10,
-  },
-
-  paymentGrid: {
-    display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit, minmax(150px, 1fr))",
-    gap: 10,
-  },
-
-  paymentField: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 3,
-  },
-
-  withdrawalFooter: {
-    marginTop: 13,
-    display: "flex",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
+    gap: 12,
     flexWrap: "wrap",
   },
-
-  withdrawalDate: {
-    color: "#9ca3af",
-    fontSize: 11,
+  actions: {
+    display: "flex",
+    gap: 6,
+    flexWrap: "wrap",
   },
-
-  rejectionBox: {
-    marginTop: 12,
-    padding: 11,
+  darkBtn: {
+    background: "#111827",
+    color: "white",
+    border: 0,
+    padding: "10px 14px",
+    borderRadius: 9,
+    cursor: "pointer",
+    fontWeight: 700,
+  },
+  badge: {
+    display: "inline-block",
+    marginTop: 7,
+    padding: "3px 8px",
+    borderRadius: 20,
+    background: "#eef2ff",
+    fontSize: 11,
+    fontWeight: 700,
+  },
+  msg: {
+    background: "#dcfce7",
+    padding: 12,
     borderRadius: 10,
-    background: "#fef2f2",
-    color: "#991b1b",
-    fontSize: 12,
+    marginBottom: 12,
   },
-
-  userBalance: {
-    marginTop: 10,
-    color: "#6b7280",
-    fontSize: 11,
-  },
-
-  modalOverlay: {
+  modal: {
     position: "fixed",
     inset: 0,
-    background: "rgba(15,23,42,0.55)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 15,
-    zIndex: 1000,
-  },
-
-  modalCard: {
-    width: "min(500px, 100%)",
-    maxHeight: "90vh",
-    overflowY: "auto",
-    background: "#ffffff",
-    borderRadius: 20,
-    padding: 21,
-    boxShadow:
-      "0 25px 80px rgba(0,0,0,0.2)",
-  },
-
-  modalHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 15,
-    alignItems: "flex-start",
-    marginBottom: 18,
-  },
-
-  modalEyebrow: {
-    fontSize: 9,
-    letterSpacing: 1.7,
-    color: "#9ca3af",
-    fontWeight: 900,
-  },
-
-  modalTitle: {
-    margin: "4px 0 0",
-    fontSize: 21,
-  },
-
-  closeButton: {
-    width: 34,
-    height: 34,
-    border: 0,
-    borderRadius: 10,
-    background: "#f3f4f6",
-    fontSize: 24,
-    cursor: "pointer",
-    lineHeight: 1,
-  },
-
-  modalSummary: {
+    background: "rgba(0,0,0,.5)",
     display: "grid",
-    gridTemplateColumns:
-      "repeat(3, 1fr)",
-    gap: 8,
-    marginBottom: 18,
+    placeItems: "center",
+    padding: 15,
   },
-
-  modalActions: {
-    display: "flex",
-    justifyContent: "flex-end",
-    gap: 8,
-    flexWrap: "wrap",
-    marginTop: 4,
-  },
-
-  warningBox: {
-    background: "#fffbeb",
-    color: "#92400e",
-    border: "1px solid #fde68a",
-    borderRadius: 10,
-    padding: 11,
-    fontSize: 12,
-    lineHeight: 1.5,
-    marginBottom: 15,
+  modalBox: {
+    background: "white",
+    width: "min(450px,100%)",
+    padding: 20,
+    borderRadius: 18,
   },
 };
-
-const globalStyles = `
-  * {
-    box-sizing: border-box;
-  }
-
-  html {
-    scroll-behavior: smooth;
-  }
-
-  body {
-    margin: 0;
-    background: #f7f9fc;
-  }
-
-  button,
-  input,
-  textarea {
-    font-family: inherit;
-  }
-
-  button:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  button {
-    transition:
-      transform 0.18s ease,
-      box-shadow 0.18s ease,
-      background 0.18s ease;
-  }
-
-  button:not(:disabled):hover {
-    transform: translateY(-1px);
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  @media (max-width: 650px) {
-    body {
-      overflow-x: hidden;
-    }
-  }
-
-  @media (max-width: 520px) {
-    .admin-mobile-hide {
-      display: none;
-    }
-  }
-`;
