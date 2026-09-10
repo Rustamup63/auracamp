@@ -1290,7 +1290,7 @@ const styles: Record<string, CSSProperties> = {
     gap: "8px",
   },
 
-  emptyBox: {
+emptyBox: {
   background: "rgba(255,255,255,0.9)",
   borderRadius: "20px",
   padding: "40px 20px",
@@ -1298,3 +1298,104 @@ const styles: Record<string, CSSProperties> = {
   color: "#64748b",
   border: "1px solid #e8edf5",
 },
+
+emptyIcon: {
+  width: "58px",
+  height: "58px",
+  borderRadius: "18px",
+  background: "#eef2ff",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  margin: "0 auto 12px",
+  fontSize: "26px",
+},
+
+emptyTitle: {
+  color: "#111827",
+  margin: "0 0 5px",
+  fontSize: "16px",
+},
+
+emptyText: {
+  margin: 0,
+  fontSize: "12px",
+},
+
+transactionBox: {
+  background: "rgba(255,255,255,0.94)",
+  borderRadius: "19px",
+  overflow: "hidden",
+  border: "1px solid #e8edf5",
+  boxShadow:
+    "0 8px 25px rgba(30, 64, 175, 0.045)",
+},
+
+transactionRow: {
+  padding: "14px 16px",
+  borderBottom: "1px solid #f1f5f9",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "15px",
+},
+
+transactionLeft: {
+  display: "flex",
+  alignItems: "center",
+  gap: "10px",
+  minWidth: 0,
+},
+
+transactionIcon: {
+  width: "38px",
+  height: "38px",
+  minWidth: "38px",
+  borderRadius: "12px",
+  background: "#ecfdf5",
+  color: "#059669",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontWeight: "900",
+},
+
+transactionTitle: {
+  display: "block",
+  fontSize: "12px",
+  color: "#111827",
+  textTransform: "capitalize",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  maxWidth: "220px",
+},
+
+transactionDate: {
+  fontSize: "10px",
+  color: "#94a3b8",
+  marginTop: "3px",
+},
+
+transactionAmount: {
+  fontWeight: "900",
+  fontSize: "13px",
+  whiteSpace: "nowrap",
+},
+
+footer: {
+  padding: "20px 4px 5px",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "15px",
+  color: "#94a3b8",
+  fontSize: "10px",
+},
+
+footerBrand: {
+  display: "flex",
+  flexDirection: "column",
+  gap: "3px",
+},
+};  
