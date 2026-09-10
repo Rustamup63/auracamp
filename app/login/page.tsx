@@ -7,53 +7,156 @@ export default function LoginPage() {
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState("");
 
-  function sendOtp() {
-    if (phone.length !== 10) {
-      alert("Please enter a valid 10-digit mobile number");
-      return;
-    }
-
-    setOtpSent(true);
-  }
-
-  function verifyOtp() {
-    if (otp.length !== 6) {
-      alert("Please enter a 6-digit OTP");
-      return;
-    }
-
-    alert("OTP verified successfully!");
-  }
-
   return (
     <main
       style={{
         minHeight: "100vh",
         background: "#f7f9fc",
         display: "flex",
-        alignItems: "center",
         justifyContent: "center",
+        alignItems: "center",
         padding: "20px",
-        fontFamily: "Arial, sans-serif",
+        fontFamily: "Arial",
       }}
     >
       <div
         style={{
           width: "100%",
-          maxWidth: "420px",
-          background: "#ffffff",
-          borderRadius: "24px",
-          padding: "32px 24px",
-          boxShadow: "0 15px 40px rgba(0,0,0,0.08)",
+          maxWidth: "400px",
+          background: "#fff",
+          padding: "30px",
+          borderRadius: "20px",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.1)",
         }}
       >
-        <div style={{ textAlign: "center", marginBottom: "30px" }}>
-          <h1
+        <h1
+          style={{
+            textAlign: "center",
+            color: "#173b8f",
+            fontSize: "34px",
+          }}
+        >
+          AURA<span style={{ color: "#f28c28" }}>CAMP</span>
+        </h1>
+
+        <p style={{ textAlign: "center", color: "#666" }}>
+          Earn • Explore • Grow
+        </p>
+
+        <h2 style={{ textAlign: "center", marginTop: "30px" }}>
+          Welcome Back
+        </h2>
+
+        <p style={{ textAlign: "center", color: "#777" }}>
+          Login to continue earning rewards
+        </p>
+
+        <label>Mobile Number</label>
+
+        <input
+          type="tel"
+          placeholder="Enter 10-digit mobile number"
+          value={phone}
+          onChange={(e) =>
+            setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))
+          }
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "14px",
+            marginTop: "8px",
+            marginBottom: "15px",
+            border: "1px solid #ddd",
+            borderRadius: "10px",
+            fontSize: "16px",
+          }}
+        />
+
+        {!otpSent ? (
+          <button
+            onClick={() => {
+              if (phone.length === 10) {
+                setOtpSent(true);
+              } else {
+                alert("Enter a valid 10-digit mobile number");
+              }
+            }}
             style={{
-              margin: 0,
-              fontSize: "36px",
-              fontWeight: 800,
-              color: "#173b8f",
+              width: "100%",
+              padding: "14px",
+              background: "#173b8f",
+              color: "#fff",
+              border: "none",
+              borderRadius: "10px",
+              fontSize: "16px",
+              fontWeight: "bold",
             }}
           >
-            AURA<span style={{ color: "#f28c28"
+            Send OTP
+          </button>
+        ) : (
+          <>
+            <input
+              type="text"
+              placeholder="Enter 6-digit OTP"
+              value={otp}
+              onChange={(e) =>
+                setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))
+              }
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "14px",
+                marginBottom: "12px",
+                border: "1px solid #ddd",
+                borderRadius: "10px",
+                fontSize: "16px",
+              }}
+            />
+
+            <button
+              onClick={() => alert("OTP verified")}
+              style={{
+                width: "100%",
+                padding: "14px",
+                background: "#173b8f",
+                color: "#fff",
+                border: "none",
+                borderRadius: "10px",
+                fontSize: "16px",
+                fontWeight: "bold",
+              }}
+            >
+              Verify OTP
+            </button>
+          </>
+        )}
+
+        <div
+          style={{
+            textAlign: "center",
+            margin: "20px 0",
+            color: "#999",
+          }}
+        >
+          OR
+        </div>
+
+        <button
+          style={{
+            width: "100%",
+            padding: "14px",
+            background: "#fff",
+            color: "#222",
+            border: "1px solid #ddd",
+            borderRadius: "10px",
+            fontSize: "15px",
+            fontWeight: "bold",
+          }}
+        >
+          Continue with Google
+        </button>
+      </div>
+    </main>
+  );
+}
