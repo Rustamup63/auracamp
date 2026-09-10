@@ -32,11 +32,35 @@ export default function AuthCallback() {
         return;
       }
 
-      setMessage("Login successful. Opening AURACAMP...");
+      const {
+  data: { user },
+} = await supabase.auth.getUser();
 
-      setTimeout(() => {
-        router.replace("/admin");
-      }, 500);
+if (!user) {
+  router.replace("/");
+  return;
+}
+
+const { data: admin } = await supabase
+  .from("admin_users")
+  .select("id, role, is_active")
+  .eq("id", user.id)
+  .eq("is_active", true)
+  .maybeSingle();
+
+if (admin) {
+  setMessage("Admin login successful. Opening Admin Panel...");
+
+  setTimeout(() => {
+    router.replace("/admin");
+  }, 500);
+} else {
+  setMessage("Login successful. Opening AURACAMP...");
+
+  setTimeout(() => {
+    router.replace("/");
+  }, 500);
+}
     }
 
     completeLogin();
