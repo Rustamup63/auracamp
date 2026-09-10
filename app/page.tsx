@@ -225,13 +225,15 @@ export default function Home() {
               <span>Refer & Earn</span>
             </button>
 
-            <button
-              style={styles.actionButton}
-              onClick={() => alert("Support system will be available soon.")}
-            >
-              🎧
-              <span>Support</span>
-            </button>
+         <button
+  style={styles.actionButton}
+  onClick={() => {
+    window.location.href = "/support";
+  }}
+>
+  🎧
+  <span>Support</span>
+</button>   
           </div>
         </section>
 
