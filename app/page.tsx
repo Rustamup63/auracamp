@@ -709,29 +709,44 @@ export default function Home() {
   );
 }
 
-const globalStyles = `
-  * {
-    box-sizing: border-box;
-  }
+const globalStyles = [
+  "* { box-sizing: border-box; }",
+  "html { scroll-behavior: smooth; }",
+  "body { margin: 0; }",
+  "button { font-family: inherit; }",
 
-  html {
-    scroll-behavior: smooth;
-  }
+  ".animateUp { animation: auraUp 0.65s ease both; }",
+  ".animateDown { animation: auraDown 0.55s ease both; }",
 
-  body {
-    margin: 0;
-  }
+  ".delay1 { animation-delay: 0.05s; }",
+  ".delay2 { animation-delay: 0.10s; }",
+  ".delay3 { animation-delay: 0.15s; }",
+  ".delay4 { animation-delay: 0.20s; }",
+  ".delay5 { animation-delay: 0.25s; }",
 
-  button {
-    font-family: inherit;
-  }
+  "@keyframes auraUp { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }",
 
-  .animateUp {
-    animation: auraUp 0.65s ease both;
-  }
+  "@keyframes auraDown { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: translateY(0); } }",
 
-  .animateDown {
-    animation: auraDown 0.55s ease both;
-  }
+  "@keyframes spin { to { transform: rotate(360deg); } }",
 
-  .delay1 { animation-delay: 0.05s
+  ".actionCard, .offerCard, .statCard, .walletCard, .startButton, .walletButton, .iconButton, .logoutButton { transition: transform 0.2s ease, box-shadow 0.2s ease; }",
+
+  ".actionCard:hover { transform: translateY(-4px); box-shadow: 0 14px 35px rgba(30,64,175,0.10); }",
+
+  ".offerCard:hover { transform: translateY(-5px); box-shadow: 0 18px 40px rgba(30,64,175,0.12); }",
+
+  ".statCard:hover { transform: translateY(-3px); box-shadow: 0 14px 35px rgba(30,64,175,0.09); }",
+
+  ".startButton:hover, .walletButton:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(37,99,235,0.28); }",
+
+  ".iconButton:hover { transform: scale(1.05); }",
+
+  ".logoutButton:hover { transform: translateY(-2px); }",
+
+  ".actionCard:active, .startButton:active, .walletButton:active { transform: scale(0.97); }",
+
+  "@media (max-width: 700px) { .desktopOnly { display: none; } }",
+
+  "@media (max-width: 520px) { body { overflow-x: hidden; } }"
+].join("\n");
