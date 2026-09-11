@@ -31,21 +31,31 @@ export default function LoginPage() {
   const [messageType, setMessageType] =
     useState<"success" | "error">("error");
 
+  const [logoFailed, setLogoFailed] = useState(false);
+
   useEffect(() => {
-    checkExistingSession();
+    let mounted = true;
+
+    async function checkSession() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+
+      if (session?.user) {
+        window.location.replace("/");
+      }
+    }
+
+    checkSession();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  async function checkExistingSession() {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (session?.user) {
-      window.location.replace("/");
-    }
-  }
-
-  function notify(
+  function showMessage(
     text: string,
     type: "success" | "error"
   ) {
@@ -53,14 +63,14 @@ export default function LoginPage() {
     setMessageType(type);
   }
 
-  function switchMode() {
-    setMode((current) =>
-      current === "login" ? "register" : "login"
-    );
-
+  function changeMode(nextMode: Mode) {
+    setMode(nextMode);
     setMessage("");
-    setName("");
     setPassword("");
+
+    if (nextMode === "login") {
+      setName("");
+    }
   }
 
   async function handleSubmit(
@@ -68,24 +78,23 @@ export default function LoginPage() {
   ) {
     e.preventDefault();
 
+    if (loading) return;
+
     setMessage("");
 
     const cleanEmail = email.trim().toLowerCase();
     const cleanName = name.trim();
 
     if (!cleanEmail) {
-      notify(
+      showMessage(
         "Please enter your email address.",
         "error"
       );
       return;
     }
 
-    if (
-      mode === "register" &&
-      !cleanName
-    ) {
-      notify(
+    if (mode === "register" && !cleanName) {
+      showMessage(
         "Please enter your full name.",
         "error"
       );
@@ -93,7 +102,7 @@ export default function LoginPage() {
     }
 
     if (password.length < 6) {
-      notify(
+      showMessage(
         "Password must be at least 6 characters.",
         "error"
       );
@@ -111,29 +120,25 @@ export default function LoginPage() {
           });
 
         if (error) {
-          const errorText =
+          const text =
             error.message.toLowerCase();
 
           if (
-            errorText.includes(
-              "email not confirmed"
-            )
+            text.includes("email not confirmed")
           ) {
-            notify(
+            showMessage(
               "Please verify your email before signing in.",
               "error"
             );
           } else if (
-            errorText.includes(
-              "invalid login credentials"
-            )
+            text.includes("invalid login credentials")
           ) {
-            notify(
+            showMessage(
               "Incorrect email or password.",
               "error"
             );
           } else {
-            notify(
+            showMessage(
               error.message,
               "error"
             );
@@ -149,9 +154,8 @@ export default function LoginPage() {
         return;
       }
 
-      /*
-       * REGISTER
-       */
+      /* REGISTER */
+
       const { data, error } =
         await supabase.auth.signUp({
           email: cleanEmail,
@@ -166,23 +170,19 @@ export default function LoginPage() {
         });
 
       if (error) {
-        const errorText =
+        const text =
           error.message.toLowerCase();
 
         if (
-          errorText.includes(
-            "already registered"
-          ) ||
-          errorText.includes(
-            "user already registered"
-          )
+          text.includes("already registered") ||
+          text.includes("user already registered")
         ) {
-          notify(
+          showMessage(
             "An account with this email already exists. Please sign in.",
             "error"
           );
         } else {
-          notify(
+          showMessage(
             error.message,
             "error"
           );
@@ -192,12 +192,11 @@ export default function LoginPage() {
       }
 
       /*
-       * EMAIL CONFIRMATION ENABLED
-       *
-       * Supabase gives user but no session.
+       * Email confirmation is enabled.
+       * Supabase gives a user but no session.
        */
       if (data.user && !data.session) {
-        notify(
+        showMessage(
           "Account created successfully. Please check your email and verify your account.",
           "success"
         );
@@ -206,15 +205,13 @@ export default function LoginPage() {
       }
 
       /*
-       * EMAIL CONFIRMATION DISABLED
+       * Email confirmation is disabled.
        */
       if (data.session) {
         window.location.replace("/");
       }
-    } catch (error) {
-      console.error(error);
-
-      notify(
+    } catch {
+      showMessage(
         "Something went wrong. Please try again.",
         "error"
       );
@@ -223,7 +220,9 @@ export default function LoginPage() {
     }
   }
 
-  async function continueWithGoogle() {
+  async function googleSignIn() {
+    if (loading) return;
+
     setLoading(true);
     setMessage("");
 
@@ -238,14 +237,15 @@ export default function LoginPage() {
         });
 
       if (error) {
-        notify(
+        showMessage(
           error.message,
           "error"
         );
+
         setLoading(false);
       }
     } catch {
-      notify(
+      showMessage(
         "Google sign-in failed. Please try again.",
         "error"
       );
@@ -255,10 +255,13 @@ export default function LoginPage() {
   }
 
   async function forgotPassword() {
-    const cleanEmail = email.trim().toLowerCase();
+    if (loading) return;
+
+    const cleanEmail =
+      email.trim().toLowerCase();
 
     if (!cleanEmail) {
-      notify(
+      showMessage(
         "Enter your email address first.",
         "error"
       );
@@ -279,25 +282,58 @@ export default function LoginPage() {
         );
 
       if (error) {
-        notify(
+        showMessage(
           error.message,
           "error"
         );
         return;
       }
 
-      notify(
+      showMessage(
         "Password reset link has been sent to your email.",
         "success"
       );
     } catch {
-      notify(
+      showMessage(
         "Unable to send reset link. Please try again.",
         "error"
       );
     } finally {
       setLoading(false);
     }
+  }
+
+  function Logo({
+    small = false,
+  }: {
+    small?: boolean;
+  }) {
+    if (logoFailed) {
+      return (
+        <div
+          className={
+            small
+              ? "fallback-logo small"
+              : "fallback-logo"
+          }
+        >
+          <span>A</span>
+        </div>
+      );
+    }
+
+    return (
+      <img
+        src="/aura-camp-logo.png"
+        alt="Aura Camp"
+        className={
+          small
+            ? "logo-image small"
+            : "logo-image"
+        }
+        onError={() => setLogoFailed(true)}
+      />
+    );
   }
 
   return (
@@ -309,24 +345,18 @@ export default function LoginPage() {
 
           {/* BRAND */}
           <div className="brand">
-            <img
-              src="/aura-camp-logo.png"
-              alt="Aura Camp"
-            />
+            <Logo />
           </div>
 
-          {/* AUTH CARD */}
+          {/* MAIN CARD */}
           <section className="auth-card">
 
-            {/* LOGO */}
+            {/* APP LOGO */}
             <div className="logo-box">
-              <img
-                src="/aura-camp-logo.png"
-                alt="Aura Camp"
-              />
+              <Logo small />
             </div>
 
-            {/* HEADING */}
+            {/* TITLE */}
             <div className="heading">
 
               <span className="eyebrow">
@@ -352,11 +382,11 @@ export default function LoginPage() {
             {/* MESSAGE */}
             {message && (
               <div
-                className={`message ${
+                className={
                   messageType === "success"
-                    ? "message-success"
-                    : "message-error"
-                }`}
+                    ? "message success"
+                    : "message error"
+                }
               >
                 <span>
                   {messageType === "success"
@@ -371,14 +401,16 @@ export default function LoginPage() {
             {/* FORM */}
             <form onSubmit={handleSubmit}>
 
+              {/* NAME */}
               {mode === "register" && (
                 <label>
-                  Full Name
+                  <span>Full Name</span>
 
                   <div className="input-box">
                     <span className="input-icon">
                       <svg
                         viewBox="0 0 24 24"
+                        aria-hidden="true"
                       >
                         <circle
                           cx="12"
@@ -396,9 +428,7 @@ export default function LoginPage() {
                       value={name}
                       placeholder="Enter your full name"
                       onChange={(e) =>
-                        setName(
-                          e.target.value
-                        )
+                        setName(e.target.value)
                       }
                       autoComplete="name"
                     />
@@ -406,13 +436,15 @@ export default function LoginPage() {
                 </label>
               )}
 
+              {/* EMAIL */}
               <label>
-                Email Address
+                <span>Email Address</span>
 
                 <div className="input-box">
                   <span className="input-icon">
                     <svg
                       viewBox="0 0 24 24"
+                      aria-hidden="true"
                     >
                       <rect
                         x="3"
@@ -430,26 +462,23 @@ export default function LoginPage() {
                     value={email}
                     placeholder="Enter your email"
                     onChange={(e) =>
-                      setEmail(
-                        e.target.value
-                      )
+                      setEmail(e.target.value)
                     }
                     autoComplete="email"
                   />
                 </div>
               </label>
 
+              {/* PASSWORD */}
               <label>
-
                 <div className="password-heading">
                   <span>Password</span>
 
                   {mode === "login" && (
                     <button
                       type="button"
-                      onClick={
-                        forgotPassword
-                      }
+                      onClick={forgotPassword}
+                      disabled={loading}
                     >
                       Forgot password?
                     </button>
@@ -460,6 +489,7 @@ export default function LoginPage() {
                   <span className="input-icon">
                     <svg
                       viewBox="0 0 24 24"
+                      aria-hidden="true"
                     >
                       <rect
                         x="5"
@@ -507,9 +537,7 @@ export default function LoginPage() {
                     }
                   >
                     {showPassword ? (
-                      <svg
-                        viewBox="0 0 24 24"
-                      >
+                      <svg viewBox="0 0 24 24">
                         <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" />
                         <circle
                           cx="12"
@@ -518,9 +546,7 @@ export default function LoginPage() {
                         />
                       </svg>
                     ) : (
-                      <svg
-                        viewBox="0 0 24 24"
-                      >
+                      <svg viewBox="0 0 24 24">
                         <path d="M3 3l18 18" />
                         <path d="M10.6 6.2A10.5 10.5 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-3.1 3.8" />
                         <path d="M6.2 6.3C3.5 8.2 2 12 2 12s3.5 6 10 6c1.2 0 2.3-.2 3.2-.5" />
@@ -530,7 +556,7 @@ export default function LoginPage() {
                 </div>
               </label>
 
-              {/* LOGIN / REGISTER */}
+              {/* PRIMARY BUTTON */}
               <button
                 type="submit"
                 className="primary-button"
@@ -562,9 +588,7 @@ export default function LoginPage() {
             <button
               type="button"
               className="google-button"
-              onClick={
-                continueWithGoogle
-              }
+              onClick={googleSignIn}
               disabled={loading}
             >
               <span className="google-logo">
@@ -576,7 +600,7 @@ export default function LoginPage() {
               </span>
             </button>
 
-            {/* SWITCH */}
+            {/* ACCOUNT SWITCH */}
             <div className="switch-account">
 
               <span>
@@ -587,8 +611,12 @@ export default function LoginPage() {
 
               <button
                 type="button"
-                onClick={
-                  switchMode
+                onClick={() =>
+                  changeMode(
+                    mode === "login"
+                      ? "register"
+                      : "login"
+                  )
                 }
               >
                 {mode === "login"
@@ -615,19 +643,15 @@ export default function LoginPage() {
 
           {/* SECURITY */}
           <div className="security">
-
             <span>
-              <i>✓</i>
-              Secure Login
+              <i>✓</i> Secure Login
             </span>
 
             <b>•</b>
 
             <span>
-              <i>⚡</i>
-              Fast & Easy
+              <i>⚡</i> Fast & Easy
             </span>
-
           </div>
 
         </div>
@@ -659,8 +683,9 @@ body {
     "Segoe UI",
     sans-serif;
 
-  background: #eef9f8;
   color: #172033;
+
+  background: #edf8f8;
 }
 
 button,
@@ -679,23 +704,23 @@ button {
   justify-content: center;
 
   padding:
-    26px 16px 35px;
+    24px 14px 32px;
 
   background:
     radial-gradient(
       circle at 8% 5%,
-      rgba(0, 174, 153, .12),
+      rgba(0,174,153,.12),
       transparent 30%
     ),
     radial-gradient(
-      circle at 95% 85%,
-      rgba(40, 110, 220, .10),
+      circle at 96% 90%,
+      rgba(35,110,220,.10),
       transparent 32%
     ),
     linear-gradient(
       145deg,
       #effbff 0%,
-      #f4fcf8 100%
+      #f3fcf8 100%
     );
 }
 
@@ -708,14 +733,62 @@ button {
   justify-content: center;
   align-items: center;
 
-  margin-bottom: 17px;
+  min-height: 68px;
+
+  margin-bottom: 14px;
 }
 
-.brand img {
-  width: 190px;
-  height: 70px;
-  object-fit: contain;
+.logo-image {
+  width: 205px;
+  height: 72px;
+
   display: block;
+
+  object-fit: contain;
+}
+
+.logo-image.small {
+  width: 58px;
+  height: 58px;
+}
+
+.fallback-logo {
+  width: 66px;
+  height: 66px;
+
+  display: grid;
+  place-items: center;
+
+  border-radius: 20px;
+
+  color: white;
+
+  background:
+    linear-gradient(
+      135deg,
+      #111c26,
+      #10b981
+    );
+
+  box-shadow:
+    0 12px 28px
+    rgba(15,80,70,.18);
+}
+
+.fallback-logo span {
+  font-size: 35px;
+  font-weight: 850;
+}
+
+.fallback-logo.small {
+  width: 58px;
+  height: 58px;
+
+  border-radius: 17px;
+}
+
+.fallback-logo.small span {
+  font-size: 31px;
 }
 
 .auth-card {
@@ -725,7 +798,8 @@ button {
     27px 27px 25px;
 
   border:
-    1px solid rgba(215, 226, 230, .95);
+    1px solid
+    rgba(215,226,230,.95);
 
   border-radius: 27px;
 
@@ -733,15 +807,19 @@ button {
     rgba(255,255,255,.96);
 
   box-shadow:
-    0 25px 70px rgba(24,55,74,.09),
-    0 4px 14px rgba(24,55,74,.035);
+    0 25px 70px
+    rgba(24,55,74,.09),
+
+    0 4px 14px
+    rgba(24,55,74,.035);
 }
 
 .logo-box {
   width: 66px;
   height: 66px;
 
-  margin: 0 auto 15px;
+  margin:
+    0 auto 15px;
 
   display: grid;
   place-items: center;
@@ -756,13 +834,8 @@ button {
   background: white;
 
   box-shadow:
-    0 10px 28px rgba(25,60,75,.09);
-}
-
-.logo-box img {
-  width: 59px;
-  height: 59px;
-  object-fit: contain;
+    0 10px 28px
+    rgba(25,60,75,.09);
 }
 
 .heading {
@@ -774,7 +847,7 @@ button {
 
   margin-bottom: 5px;
 
-  color: #70818b;
+  color: #71838d;
 
   font-size: 9px;
   font-weight: 900;
@@ -788,7 +861,7 @@ button {
   color: #172033;
 
   font-size:
-    clamp(30px, 8vw, 39px);
+    clamp(31px, 8vw, 39px);
 
   line-height: 1.08;
 
@@ -796,12 +869,12 @@ button {
 }
 
 .heading p {
+  max-width: 350px;
+
   margin:
     9px auto 23px;
 
-  max-width: 340px;
-
-  color: #788893;
+  color: #788993;
 
   font-size: 12px;
 
@@ -839,23 +912,29 @@ button {
   font-weight: 900;
 }
 
-.message-success {
+.message.success {
   color: #087443;
+
   background: #effdf5;
-  border: 1px solid #bcebd0;
+
+  border:
+    1px solid #bcebd0;
 }
 
-.message-success > span {
+.message.success > span {
   background: #d7f8e3;
 }
 
-.message-error {
+.message.error {
   color: #b42318;
+
   background: #fff6f5;
-  border: 1px solid #f3c7c3;
+
+  border:
+    1px solid #f3c7c3;
 }
 
-.message-error > span {
+.message.error > span {
   background: #ffe2df;
 }
 
@@ -872,6 +951,31 @@ label {
 
   font-size: 11px;
   font-weight: 850;
+}
+
+.password-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.password-heading button {
+  padding: 0;
+
+  border: 0;
+
+  background: transparent;
+
+  color: #1777b6;
+
+  font-size: 10px;
+  font-weight: 850;
+
+  cursor: pointer;
+}
+
+.password-heading button:disabled {
+  opacity: .5;
 }
 
 .input-box {
@@ -903,6 +1007,8 @@ label {
 .input-icon {
   width: 44px;
 
+  flex: 0 0 44px;
+
   display: grid;
   place-items: center;
 
@@ -930,7 +1036,7 @@ label {
   min-width: 0;
 
   padding:
-    0 11px 0 0;
+    0 9px 0 0;
 
   border: 0;
   outline: 0;
@@ -946,35 +1052,16 @@ label {
   color: #a0adb6;
 }
 
-.password-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.password-heading button {
-  padding: 0;
-
-  border: 0;
-
-  background: transparent;
-
-  color: #1777b6;
-
-  font-size: 10px;
-  font-weight: 850;
-
-  cursor: pointer;
-}
-
 .show-password {
   width: 43px;
   height: 100%;
 
+  flex: 0 0 43px;
+
   display: grid;
   place-items: center;
 
-  flex: 0 0 43px;
+  padding: 0;
 
   border: 0;
 
@@ -1012,6 +1099,7 @@ label {
   margin-top: 2px;
 
   border: 0;
+
   border-radius: 15px;
 
   color: white;
@@ -1047,7 +1135,9 @@ label {
 
 .primary-button:disabled {
   opacity: .58;
+
   cursor: wait;
+
   transform: none;
 }
 
@@ -1121,6 +1211,7 @@ label {
 
 .google-button:disabled {
   opacity: .58;
+
   cursor: wait;
 }
 
@@ -1149,13 +1240,13 @@ label {
   align-items: center;
   justify-content: center;
 
-  gap: 4px;
+  gap: 5px;
 
-  margin-top: 19px;
+  margin-top: 20px;
 
   color: #788792;
 
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .switch-account button {
@@ -1167,6 +1258,7 @@ label {
 
   color: #1777b6;
 
+  font-size: 13px;
   font-weight: 850;
 
   cursor: pointer;
@@ -1189,6 +1281,7 @@ label {
 
 .terms a {
   color: #1777b6;
+
   font-weight: 750;
 }
 
@@ -1219,7 +1312,9 @@ label {
 
   .auth-page {
     align-items: center;
-    padding: 35px 20px;
+
+    padding:
+      35px 20px;
   }
 
   .auth-card {
@@ -1232,11 +1327,15 @@ label {
 
   .auth-page {
     padding:
-      18px 12px 27px;
+      17px 12px 27px;
   }
 
-  .brand img {
-    width: 180px;
+  .brand {
+    min-height: 64px;
+  }
+
+  .logo-image {
+    width: 185px;
     height: 65px;
   }
 
@@ -1252,7 +1351,7 @@ label {
     height: 61px;
   }
 
-  .logo-box img {
+  .logo-image.small {
     width: 54px;
     height: 54px;
   }
@@ -1270,6 +1369,14 @@ label {
   .google-button {
     height: 54px;
   }
+
+  .switch-account {
+    font-size: 12px;
+  }
+
+  .switch-account button {
+    font-size: 13px;
+  }
 }
 
 @media (max-width: 350px) {
@@ -1279,7 +1386,7 @@ label {
     padding-right: 15px;
   }
 
-  .brand img {
+  .logo-image {
     width: 165px;
   }
 }
