@@ -56,7 +56,6 @@ type ComingSoonType =
 
 export default function Home() {
   const [loading, setLoading] = useState(true);
-
   const [userName, setUserName] = useState("User");
 
   const [profile, setProfile] =
@@ -88,10 +87,6 @@ export default function Home() {
           return;
         }
 
-        /*
-         * Admin users stay in admin panel.
-         * Normal users stay on mobile AURA CAMP dashboard.
-         */
         const { data: admin } = await supabase
           .from("admin_users")
           .select("id, role, is_active")
@@ -104,10 +99,6 @@ export default function Home() {
           return;
         }
 
-        /*
-         * Load independent data in parallel.
-         * This avoids unnecessary dashboard delay.
-         */
         const [
           profileResult,
           campaignResult,
@@ -186,10 +177,6 @@ export default function Home() {
     };
   }, []);
 
-  /*
-   * Keep profile/wallet data fresh when admin
-   * processes something from another device.
-   */
   useEffect(() => {
     let channel:
       | ReturnType<typeof supabase.channel>
@@ -206,7 +193,6 @@ export default function Home() {
         .channel(
           `auracamp-dashboard-${user.id}`
         )
-
         .on(
           "postgres_changes",
           {
@@ -236,7 +222,6 @@ export default function Home() {
             }
           }
         )
-
         .on(
           "postgres_changes",
           {
@@ -261,7 +246,6 @@ export default function Home() {
             setTransactions(data || []);
           }
         )
-
         .subscribe();
     }
 
@@ -269,19 +253,14 @@ export default function Home() {
 
     return () => {
       if (channel) {
-        supabase.removeChannel(
-          channel
-        );
+        supabase.removeChannel(channel);
       }
     };
   }, []);
 
   async function logout() {
     await supabase.auth.signOut();
-
-    window.location.replace(
-      "/login"
-    );
+    window.location.replace("/login");
   }
 
   function openComingSoon(
@@ -307,9 +286,7 @@ export default function Home() {
       } = await supabase.auth.getUser();
 
       if (!user) {
-        window.location.replace(
-          "/login"
-        );
+        window.location.replace("/login");
         return;
       }
 
@@ -342,16 +319,13 @@ export default function Home() {
       }
 
       const separator =
-        campaign.landing_url.includes(
-          "?"
-        )
+        campaign.landing_url.includes("?")
           ? "&"
           : "?";
 
       const trackingUrl =
         `${campaign.landing_url}` +
-        `${separator}` +
-        `click_id=${encodeURIComponent(
+        `${separator}click_id=${encodeURIComponent(
           clickId
         )}`;
 
@@ -425,25 +399,21 @@ export default function Home() {
             style={styles.header}
           >
             <div style={styles.brandArea}>
-
               <div style={styles.brand}>
                 <span>AURA</span>{" "}
                 <b>CAMP</b>
               </div>
 
-              <div
-                style={styles.tagline}
-              >
+              <div style={styles.tagline}>
                 Earn • Explore • Grow
               </div>
-
             </div>
 
-            <div
-              style={styles.headerRight}
-            >
+            <div style={styles.headerRight}>
+
               <button
-                className="iconButton"
+                type="button"
+                className="topIconButton"
                 style={
                   styles.notificationButton
                 }
@@ -452,18 +422,19 @@ export default function Home() {
                     "Notifications"
                   )
                 }
-                aria-label="Notifications"
               >
                 🔔
               </button>
 
               <button
+                type="button"
                 className="logoutButton"
                 onClick={logout}
                 style={styles.logout}
               >
                 Logout
               </button>
+
             </div>
           </header>
 
@@ -488,11 +459,7 @@ export default function Home() {
               <div
                 style={styles.welcomeText}
               >
-                <p
-                  style={
-                    styles.smallText
-                  }
-                >
+                <p style={styles.smallText}>
                   Welcome back 👋
                 </p>
 
@@ -504,9 +471,7 @@ export default function Home() {
                   {userName}
                 </h1>
 
-                <p
-                  style={styles.subText}
-                >
+                <p style={styles.subText}>
                   Complete offers and
                   grow your earnings.
                 </p>
@@ -515,6 +480,8 @@ export default function Home() {
             </div>
 
             <button
+              type="button"
+              className="welcomeButton"
               style={
                 styles.welcomeBadge
               }
@@ -577,7 +544,7 @@ export default function Home() {
             </span>
           </section>
 
-          {/* WALLET + STATS */}
+          {/* STATS */}
 
           <section
             className="animateUp delay2 statsGrid"
@@ -588,11 +555,12 @@ export default function Home() {
               className="walletCard"
               style={styles.walletCard}
             >
+
               <div
                 style={styles.walletTop}
               >
-                <div>
 
+                <div>
                   <div
                     style={
                       styles.walletLabel
@@ -608,7 +576,6 @@ export default function Home() {
                   >
                     ₹{wallet.toFixed(2)}
                   </div>
-
                 </div>
 
                 <div
@@ -618,6 +585,7 @@ export default function Home() {
                 >
                   💳
                 </div>
+
               </div>
 
               <div
@@ -625,6 +593,7 @@ export default function Home() {
                   styles.walletBottom
                 }
               >
+
                 <span
                   style={
                     styles.walletHint
@@ -634,6 +603,7 @@ export default function Home() {
                 </span>
 
                 <button
+                  type="button"
                   className="walletButton"
                   style={
                     styles.walletButton
@@ -645,7 +615,9 @@ export default function Home() {
                 >
                   + Withdraw
                 </button>
+
               </div>
+
             </div>
 
             <div
@@ -765,6 +737,7 @@ export default function Home() {
             >
 
               <button
+                type="button"
                 className="actionCard"
                 style={
                   styles.actionButton
@@ -791,9 +764,7 @@ export default function Home() {
                   🎁
                 </div>
 
-                <div
-                  className="actionText"
-                >
+                <div className="actionText">
                   <strong
                     style={
                       styles.actionTitle
@@ -821,6 +792,7 @@ export default function Home() {
               </button>
 
               <button
+                type="button"
                 className="actionCard"
                 style={
                   styles.actionButton
@@ -842,9 +814,7 @@ export default function Home() {
                   💸
                 </div>
 
-                <div
-                  className="actionText"
-                >
+                <div className="actionText">
                   <strong
                     style={
                       styles.actionTitle
@@ -872,6 +842,7 @@ export default function Home() {
               </button>
 
               <button
+                type="button"
                 className="actionCard"
                 style={
                   styles.actionButton
@@ -894,9 +865,7 @@ export default function Home() {
                   👥
                 </div>
 
-                <div
-                  className="actionText"
-                >
+                <div className="actionText">
                   <strong
                     style={
                       styles.actionTitle
@@ -924,6 +893,7 @@ export default function Home() {
               </button>
 
               <button
+                type="button"
                 className="actionCard"
                 style={
                   styles.actionButton
@@ -945,9 +915,7 @@ export default function Home() {
                   🎧
                 </div>
 
-                <div
-                  className="actionText"
-                >
+                <div className="actionText">
                   <strong
                     style={
                       styles.actionTitle
@@ -1018,8 +986,7 @@ export default function Home() {
               </span>
             </div>
 
-            {campaigns.length ===
-            0 ? (
+            {campaigns.length === 0 ? (
               <div
                 style={
                   styles.emptyBox
@@ -1073,6 +1040,7 @@ export default function Home() {
                           styles.offerImageWrap
                         }
                       >
+
                         {campaign.image_url ? (
                           <img
                             src={
@@ -1106,6 +1074,7 @@ export default function Home() {
                             campaign.reward
                           ).toFixed(2)}
                         </div>
+
                       </div>
 
                       <div
@@ -1155,6 +1124,7 @@ export default function Home() {
                         </p>
 
                         <button
+                          type="button"
                           className="startButton"
                           style={
                             styles.startButton
@@ -1180,7 +1150,6 @@ export default function Home() {
                         </button>
 
                       </div>
-
                     </div>
                   )
                 )}
@@ -1220,8 +1189,7 @@ export default function Home() {
               </div>
             </div>
 
-            {transactions.length ===
-            0 ? (
+            {transactions.length === 0 ? (
               <div
                 style={
                   styles.emptyBox
@@ -1307,7 +1275,6 @@ export default function Home() {
                             }}
                           >
                             <strong
-                              className="transactionTitle"
                               style={
                                 styles.transactionTitle
                               }
@@ -1370,8 +1337,6 @@ export default function Home() {
 
           </section>
 
-          {/* FOOTER */}
-
           <footer
             style={styles.footer}
           >
@@ -1400,62 +1365,126 @@ export default function Home() {
 
         </div>
 
-        {/* MOBILE BOTTOM NAV */}
+        {/* =================================================
+            FIXED BOTTOM NAV
+        ================================================= */}
 
         <nav
-          className="mobileBottomNav"
-          style={
-            styles.mobileBottomNav
-          }
+          className="auraBottomNav"
+          aria-label="Aura Camp navigation"
         >
 
           {/* HOME */}
 
           <button
-            className="mobileNavItem active"
-            onClick={() =>
+            type="button"
+            className="auraNavItem auraNavActive"
+            onClick={() => {
               window.scrollTo({
                 top: 0,
                 behavior: "smooth",
-              })
-            }
+              });
+            }}
           >
-            <span>⌂</span>
-            <small>Home</small>
+            <span className="auraNavIcon">
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  d="M3 10.8 12 3l9 7.8v9.2a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+
+            <span className="auraNavLabel">
+              Home
+            </span>
           </button>
 
           {/* OFFERS */}
 
           <button
-            className="mobileNavItem"
-            onClick={() =>
+            type="button"
+            className="auraNavItem"
+            onClick={() => {
               document
-                .getElementById(
-                  "offers"
-                )
+                .getElementById("offers")
                 ?.scrollIntoView({
                   behavior: "smooth",
                   block: "start",
-                })
-            }
+                });
+            }}
           >
-            <span>▦</span>
-            <small>Offers</small>
+            <span className="auraNavIcon">
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <rect
+                  x="4"
+                  y="4"
+                  width="6"
+                  height="6"
+                  rx="1"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                />
+                <rect
+                  x="14"
+                  y="4"
+                  width="6"
+                  height="6"
+                  rx="1"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                />
+                <rect
+                  x="4"
+                  y="14"
+                  width="6"
+                  height="6"
+                  rx="1"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                />
+                <rect
+                  x="14"
+                  y="14"
+                  width="6"
+                  height="6"
+                  rx="1"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                />
+              </svg>
+            </span>
+
+            <span className="auraNavLabel">
+              Offers
+            </span>
           </button>
 
           {/* TELEGRAM */}
 
           <button
-            className="telegramNav"
+            type="button"
+            className="auraTelegramNav"
             onClick={() => {
               window.location.href =
                 TELEGRAM_URL;
             }}
-            aria-label="Telegram"
+            aria-label="Open Aura Camp Telegram"
           >
-            <span
-              className="telegramCircle"
-            >
+            <span className="auraTelegramCircle">
               <svg
                 viewBox="0 0 24 24"
                 aria-hidden="true"
@@ -1467,52 +1496,102 @@ export default function Home() {
               </svg>
             </span>
 
-            <small>
+            <span className="telegramText">
               Telegram
-            </small>
+            </span>
           </button>
 
           {/* MY OFFERS */}
 
           <button
-            className="mobileNavItem"
-            onClick={() =>
+            type="button"
+            className="auraNavItem"
+            onClick={() => {
               openComingSoon(
                 "My Offers"
-              )
-            }
+              );
+            }}
           >
-            <span>▤</span>
+            <span className="auraNavIcon">
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <rect
+                  x="5"
+                  y="4"
+                  width="14"
+                  height="17"
+                  rx="2"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                />
+                <path
+                  d="M9 4.5V3h6v1.5M8 9h8M8 13h8M8 17h5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </span>
 
-            <small>
+            <span className="auraNavLabel">
               My Offers
-            </small>
+            </span>
 
-            <em>Soon</em>
+            <span className="auraSoon">
+              Soon
+            </span>
           </button>
 
           {/* PROFILE */}
 
           <button
-            className="mobileNavItem"
-            onClick={() =>
+            type="button"
+            className="auraNavItem"
+            onClick={() => {
               openComingSoon(
                 "Profile"
-              )
-            }
+              );
+            }}
           >
-            <span>♙</span>
+            <span className="auraNavIcon">
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="12"
+                  cy="8"
+                  r="3.2"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                />
+                <path
+                  d="M5 20c.8-3.5 3.1-5.2 7-5.2s6.2 1.7 7 5.2"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </span>
 
-            <small>
+            <span className="auraNavLabel">
               Profile
-            </small>
+            </span>
 
-            <em>Soon</em>
+            <span className="auraSoon">
+              Soon
+            </span>
           </button>
 
         </nav>
 
-        {/* COMING SOON */}
+        {/* COMING SOON MODAL */}
 
         {comingSoon && (
           <div
@@ -1529,18 +1608,16 @@ export default function Home() {
             >
 
               <button
+                type="button"
                 className="comingClose"
                 onClick={
                   closeComingSoon
                 }
-                aria-label="Close"
               >
                 ×
               </button>
 
-              <div
-                className="comingIcon"
-              >
+              <div className="comingIcon">
                 ⏳
               </div>
 
@@ -1562,6 +1639,7 @@ export default function Home() {
               </small>
 
               <button
+                type="button"
                 className="comingButton"
                 onClick={
                   closeComingSoon
@@ -1607,12 +1685,22 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
-button:disabled {
-  opacity: .65;
-  cursor: not-allowed;
+button:focus {
+  outline: none;
 }
 
-/* ANIMATION */
+button:disabled {
+  opacity: .65;
+}
+
+button,
+a {
+  touch-action: manipulation;
+}
+
+/* ========================================
+   ANIMATIONS
+======================================== */
 
 .animateUp {
   animation: auraUp .55s ease both;
@@ -1673,170 +1761,677 @@ button:disabled {
 }
 
 @keyframes telegramFloat {
-  0%, 100% {
+  0%,
+  100% {
     transform: translateY(0);
   }
 
   50% {
-    transform: translateY(-4px);
+    transform: translateY(-3px);
   }
 }
 
 @keyframes modalIn {
   from {
     opacity: 0;
-    transform:
-      translateY(14px)
-      scale(.94);
+    transform: translateY(14px) scale(.94);
   }
 
   to {
     opacity: 1;
-    transform:
-      translateY(0)
-      scale(1);
+    transform: translateY(0) scale(1);
   }
 }
 
-/* MOBILE APP SHELL */
-
-.auraAppShell {
-  width: 100%;
-}
-
-/* BOTTOM NAV */
-
-.mobileBottomNav {
-  display: grid;
-}
-
-.mobileNavItem,
-.telegramNav {
-  -webkit-tap-highlight-color: transparent;
-}
-
-/* MOBILE */
-
-@media (max-width: 520px) {
-
-  html,
-  body {
-    width: 100%;
-    max-width: 100%;
-    overflow-x: hidden !important;
-  }
-
-  .mobileBottomNav {
-    display: grid !important;
-  }
-
-  .container {
-    width: 100% !important;
-    max-width: 100% !important;
-  }
-
-  .statsGrid {
-    grid-template-columns:
-      1fr !important;
-  }
-
-  .walletCard {
-    grid-column: auto !important;
-  }
-
-  .actionGrid {
-    grid-template-columns:
-      repeat(2, minmax(0, 1fr)) !important;
-  }
-
-  .offerGrid {
-    grid-template-columns:
-      1fr !important;
-  }
-
-  .welcome {
-    flex-direction: column !important;
-    align-items: stretch !important;
-  }
-
-  .welcomeBadge {
-    align-self: flex-start !important;
-  }
-
-  .actionArrow {
-    display: none !important;
-  }
-
-  .pageBottomSpace {
-    padding-bottom: 110px;
-  }
-}
-
-/* DESKTOP BROWSER
-   Still render as mobile app shell */
+/* ========================================
+   MOBILE APP WIDTH
+======================================== */
 
 @media (min-width: 521px) {
-
   body {
     background: #eaf2f4;
   }
-
-  .mobileBottomNav {
-    display: grid !important;
-  }
-
-  .mobileBottomNav {
-    width: 520px !important;
-    left: 50% !important;
-    right: auto !important;
-    transform: translateX(-50%);
-  }
-
-  .pageDesktopShell {
-    width: 540px;
-    margin: 0 auto;
-  }
 }
 
-/* SMALL PHONES */
+/* ========================================
+   BOTTOM NAV - IMPORTANT
+======================================== */
+
+.auraBottomNav {
+  position: fixed !important;
+
+  left: 50% !important;
+
+  bottom:
+    calc(8px + env(safe-area-inset-bottom))
+    !important;
+
+  transform:
+    translateX(-50%) !important;
+
+  width:
+    calc(100% - 18px) !important;
+
+  max-width:
+    520px !important;
+
+  height:
+    74px !important;
+
+  display:
+    grid !important;
+
+  grid-template-columns:
+    repeat(5, minmax(0, 1fr)) !important;
+
+  align-items:
+    center !important;
+
+  padding:
+    4px !important;
+
+  margin:
+    0 !important;
+
+  background:
+    rgba(255,255,255,.98) !important;
+
+  border:
+    1px solid #dce6e9 !important;
+
+  border-radius:
+    25px !important;
+
+  box-shadow:
+    0 15px 42px rgba(15,40,55,.17) !important;
+
+  backdrop-filter:
+    blur(18px) !important;
+
+  -webkit-backdrop-filter:
+    blur(18px) !important;
+
+  z-index:
+    99999 !important;
+
+  overflow:
+    visible !important;
+}
+
+/* ALL BOTTOM BUTTONS */
+
+.auraBottomNav button {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+
+  border: 0 !important;
+  outline: 0 !important;
+
+  margin: 0 !important;
+
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif !important;
+
+  cursor: pointer !important;
+
+  -webkit-tap-highlight-color:
+    transparent !important;
+}
+
+/* NORMAL ITEMS */
+
+.auraNavItem {
+  position: relative !important;
+
+  width: 100% !important;
+
+  height: 64px !important;
+
+  padding: 0 !important;
+
+  background:
+    transparent !important;
+
+  color:
+    #7c878d !important;
+
+  display:
+    flex !important;
+
+  flex-direction:
+    column !important;
+
+  align-items:
+    center !important;
+
+  justify-content:
+    center !important;
+
+  gap:
+    3px !important;
+
+  border-radius:
+    17px !important;
+
+  transition:
+    transform .15s ease,
+    color .15s ease,
+    background .15s ease !important;
+}
+
+.auraNavItem:active {
+  transform:
+    scale(.91) !important;
+}
+
+.auraNavItem.auraNavActive {
+  color:
+    #155eef !important;
+}
+
+.auraNavIcon {
+  width:
+    27px !important;
+
+  height:
+    27px !important;
+
+  display:
+    flex !important;
+
+  align-items:
+    center !important;
+
+  justify-content:
+    center !important;
+
+  color:
+    currentColor !important;
+}
+
+.auraNavIcon svg {
+  width:
+    23px !important;
+
+  height:
+    23px !important;
+
+  display:
+    block !important;
+}
+
+.auraNavLabel {
+  display:
+    block !important;
+
+  font-size:
+    8px !important;
+
+  line-height:
+    11px !important;
+
+  font-weight:
+    700 !important;
+
+  color:
+    currentColor !important;
+
+  white-space:
+    nowrap !important;
+}
+
+/* ========================================
+   TELEGRAM CENTER BUTTON
+======================================== */
+
+.auraTelegramNav {
+  position: relative !important;
+
+  width:
+    100% !important;
+
+  height:
+    90px !important;
+
+  margin:
+    -20px 0 0 !important;
+
+  padding:
+    0 !important;
+
+  background:
+    transparent !important;
+
+  color:
+    #68767d !important;
+
+  display:
+    flex !important;
+
+  flex-direction:
+    column !important;
+
+  align-items:
+    center !important;
+
+  justify-content:
+    flex-start !important;
+
+  gap:
+    3px !important;
+
+  transition:
+    transform .15s ease !important;
+}
+
+.auraTelegramNav:active {
+  transform:
+    scale(.92) !important;
+}
+
+.auraTelegramCircle {
+  width:
+    66px !important;
+
+  height:
+    66px !important;
+
+  min-width:
+    66px !important;
+
+  min-height:
+    66px !important;
+
+  display:
+    flex !important;
+
+  align-items:
+    center !important;
+
+  justify-content:
+    center !important;
+
+  border-radius:
+    50% !important;
+
+  border:
+    4px solid #fff !important;
+
+  background:
+    linear-gradient(
+      145deg,
+      #29a9e8,
+      #168fd0,
+      #0879b5
+    ) !important;
+
+  box-shadow:
+    0 9px 25px
+    rgba(22,143,208,.30) !important;
+
+  animation:
+    telegramFloat 2.8s ease-in-out infinite !important;
+
+  transition:
+    transform .15s ease !important;
+}
+
+.auraTelegramCircle svg {
+  width:
+    31px !important;
+
+  height:
+    31px !important;
+
+  display:
+    block !important;
+}
+
+.telegramText {
+  display:
+    block !important;
+
+  font-size:
+    8px !important;
+
+  line-height:
+    11px !important;
+
+  font-weight:
+    700 !important;
+
+  color:
+    #68767d !important;
+
+  white-space:
+    nowrap !important;
+}
+
+/* SOON BADGE */
+
+.auraSoon {
+  position:
+    absolute !important;
+
+  top:
+    3px !important;
+
+  right:
+    1px !important;
+
+  padding:
+    2px 4px !important;
+
+  border-radius:
+    999px !important;
+
+  background:
+    #fff0f3 !important;
+
+  color:
+    #e11d48 !important;
+
+  border:
+    1px solid #ffd6df !important;
+
+  font-size:
+    5px !important;
+
+  line-height:
+    8px !important;
+
+  font-weight:
+    850 !important;
+}
+
+/* ========================================
+   COMING SOON
+======================================== */
+
+.comingOverlay {
+  position:
+    fixed !important;
+
+  inset:
+    0 !important;
+
+  z-index:
+    100000 !important;
+
+  display:
+    flex !important;
+
+  align-items:
+    center !important;
+
+  justify-content:
+    center !important;
+
+  padding:
+    20px !important;
+
+  background:
+    rgba(10,25,35,.48) !important;
+
+  backdrop-filter:
+    blur(7px) !important;
+
+  -webkit-backdrop-filter:
+    blur(7px) !important;
+}
+
+.comingModal {
+  position:
+    relative !important;
+
+  width:
+    min(100%, 350px) !important;
+
+  padding:
+    27px 21px 21px !important;
+
+  border-radius:
+    25px !important;
+
+  background:
+    #fff !important;
+
+  text-align:
+    center !important;
+
+  box-shadow:
+    0 25px 70px
+    rgba(10,30,45,.25) !important;
+
+  animation:
+    modalIn .25s ease both !important;
+}
+
+.comingClose {
+  position:
+    absolute !important;
+
+  top:
+    9px !important;
+
+  right:
+    11px !important;
+
+  width:
+    29px !important;
+
+  height:
+    29px !important;
+
+  border:
+    0 !important;
+
+  border-radius:
+    50% !important;
+
+  background:
+    #f1f5f7 !important;
+
+  color:
+    #64748b !important;
+
+  font-size:
+    20px !important;
+
+  cursor:
+    pointer !important;
+}
+
+.comingIcon {
+  width:
+    66px !important;
+
+  height:
+    66px !important;
+
+  margin:
+    0 auto 13px !important;
+
+  border-radius:
+    21px !important;
+
+  background:
+    linear-gradient(
+      135deg,
+      #f0e7ff,
+      #e8f0ff
+    ) !important;
+
+  display:
+    flex !important;
+
+  align-items:
+    center !important;
+
+  justify-content:
+    center !important;
+
+  font-size:
+    29px !important;
+}
+
+.comingModal h2 {
+  margin:
+    0 0 8px !important;
+
+  color:
+    #111827 !important;
+
+  font-size:
+    21px !important;
+}
+
+.comingModal p {
+  margin:
+    0 !important;
+
+  color:
+    #64748b !important;
+
+  font-size:
+    11px !important;
+
+  line-height:
+    1.6 !important;
+}
+
+.comingModal small {
+  display:
+    block !important;
+
+  margin-top:
+    5px !important;
+
+  color:
+    #94a3b8 !important;
+
+  font-size:
+    9px !important;
+}
+
+.comingButton {
+  width:
+    100% !important;
+
+  margin-top:
+    18px !important;
+
+  padding:
+    11px !important;
+
+  border:
+    0 !important;
+
+  border-radius:
+    12px !important;
+
+  background:
+    linear-gradient(
+      90deg,
+      #155eef,
+      #6d28d9
+    ) !important;
+
+  color:
+    #fff !important;
+
+  font-size:
+    10px !important;
+
+  font-weight:
+    850 !important;
+
+  cursor:
+    pointer !important;
+}
+
+/* ========================================
+   SMALL MOBILE
+======================================== */
 
 @media (max-width: 360px) {
 
-  .page {
-    padding-left: 7px !important;
-    padding-right: 7px !important;
+  .auraBottomNav {
+    width:
+      calc(100% - 12px) !important;
+
+    height:
+      70px !important;
+
+    bottom:
+      calc(5px + env(safe-area-inset-bottom))
+      !important;
   }
 
-  .brand {
-    font-size: 18px !important;
+  .auraNavItem {
+    height:
+      60px !important;
   }
 
-  .logoutButton {
-    padding: 8px !important;
-    font-size: 10px !important;
+  .auraNavIcon {
+    width:
+      25px !important;
+
+    height:
+      25px !important;
   }
 
-  .notificationButton {
-    width: 34px !important;
-    height: 34px !important;
+  .auraNavIcon svg {
+    width:
+      21px !important;
+
+    height:
+      21px !important;
   }
 
-  .actionButton {
-    padding: 10px 7px !important;
+  .auraNavLabel,
+  .telegramText {
+    font-size:
+      7px !important;
   }
 
-  .actionIcon {
-    width: 32px !important;
-    height: 32px !important;
-    min-width: 32px !important;
+  .auraTelegramCircle {
+    width:
+      62px !important;
+
+    height:
+      62px !important;
+
+    min-width:
+      62px !important;
+
+    min-height:
+      62px !important;
   }
 
-  .actionTitle {
-    font-size: 10px !important;
-  }
+  .auraTelegramCircle svg {
+    width:
+      28px !important;
 
-  .actionSub {
-    font-size: 8px !important;
+    height:
+      28px !important;
+  }
+}
+
+/* ========================================
+   DESKTOP STILL MOBILE APP WIDTH
+======================================== */
+
+@media (min-width: 521px) {
+
+  .auraBottomNav {
+    width:
+      510px !important;
   }
 }
 `;
@@ -1908,17 +2503,17 @@ const styles: Record<
     alignItems: "center",
     justifyContent: "center",
     background:
-      "linear-gradient(145deg, #f1fbfc, #f7fbff, #faf7ff)",
+      "linear-gradient(145deg,#f1fbfc,#f7fbff,#faf7ff)",
     fontFamily:
-      "Inter, system-ui, sans-serif",
+      "Inter,system-ui,sans-serif",
   },
 
   loadingBox: {
     width: "260px",
     padding: "30px",
     borderRadius: "24px",
-    textAlign: "center",
     background: "#fff",
+    textAlign: "center",
     boxShadow:
       "0 20px 60px rgba(30,64,175,.10)",
   },
@@ -1963,8 +2558,7 @@ const styles: Record<
     borderRadius: "19px",
     display: "flex",
     alignItems: "center",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     marginBottom: "10px",
     border:
       "1px solid #dfe9ec",
@@ -2021,7 +2615,7 @@ const styles: Record<
 
   welcome: {
     background:
-      "linear-gradient(135deg, #fff 0%, #f8fbff 55%, #f5f0ff 100%)",
+      "linear-gradient(135deg,#fff 0%,#f8fbff 55%,#f5f0ff 100%)",
     borderRadius: "21px",
     padding: "17px",
     marginBottom: "10px",
@@ -2031,8 +2625,7 @@ const styles: Record<
       "0 9px 28px rgba(20,60,80,.055)",
     display: "flex",
     alignItems: "center",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     gap: "10px",
     minWidth: 0,
   },
@@ -2051,7 +2644,7 @@ const styles: Record<
     minWidth: "48px",
     borderRadius: "15px",
     background:
-      "linear-gradient(135deg, #155eef, #16a34a)",
+      "linear-gradient(135deg,#155eef,#16a34a)",
     color: "#fff",
     display: "flex",
     alignItems: "center",
@@ -2119,7 +2712,7 @@ const styles: Record<
     minWidth: "40px",
     borderRadius: "12px",
     background:
-      "linear-gradient(135deg, #155eef, #16a34a)",
+      "linear-gradient(135deg,#155eef,#16a34a)",
     color: "#fff",
     display: "flex",
     alignItems: "center",
@@ -2168,7 +2761,7 @@ const styles: Record<
 
   walletCard: {
     background:
-      "linear-gradient(135deg, #123746, #164b59 55%, #166a51)",
+      "linear-gradient(135deg,#123746,#164b59 55%,#166a51)",
     color: "#fff",
     padding: "17px",
     borderRadius: "21px",
@@ -2182,8 +2775,7 @@ const styles: Record<
 
   walletTop: {
     display: "flex",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     alignItems: "flex-start",
     gap: "10px",
   },
@@ -2216,8 +2808,7 @@ const styles: Record<
   walletBottom: {
     display: "flex",
     alignItems: "center",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     gap: "8px",
     marginTop: "18px",
   },
@@ -2289,8 +2880,7 @@ const styles: Record<
   sectionHeader: {
     display: "flex",
     alignItems: "center",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     marginBottom: "10px",
     gap: "8px",
   },
@@ -2447,8 +3037,7 @@ const styles: Record<
   offerTop: {
     display: "flex",
     alignItems: "center",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     gap: "7px",
   },
 
@@ -2555,8 +3144,7 @@ const styles: Record<
     borderBottom:
       "1px solid #eef2f4",
     display: "flex",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     alignItems: "center",
     gap: "10px",
     minWidth: 0,
@@ -2608,8 +3196,7 @@ const styles: Record<
   footer: {
     padding: "18px 3px 4px",
     display: "flex",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     alignItems: "center",
     gap: "12px",
     color: "#94a3b8",
@@ -2620,156 +3207,5 @@ const styles: Record<
     display: "flex",
     flexDirection: "column",
     gap: "3px",
-  },
-
-  /* BOTTOM NAV */
-
-  mobileBottomNav: {
-    position: "fixed",
-    left: "8px",
-    right: "8px",
-    bottom:
-      "max(8px, env(safe-area-inset-bottom))",
-    zIndex: 500,
-    height: "76px",
-    padding: "4px 5px",
-    border:
-      "1px solid #dfe8eb",
-    borderRadius: "25px",
-    background:
-      "rgba(255,255,255,.97)",
-    backdropFilter:
-      "blur(20px)",
-    WebkitBackdropFilter:
-      "blur(20px)",
-    boxShadow:
-      "0 16px 45px rgba(15,40,55,.17)",
-    gridTemplateColumns:
-      "repeat(5,1fr)",
-    alignItems: "end",
-  },
-
-  mobileNavItem: {
-    position: "relative",
-    height: "66px",
-    border: 0,
-    background:
-      "transparent",
-    color: "#7b8790",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "2px",
-    cursor: "pointer",
-    minWidth: 0,
-  },
-
-  telegramNav: {
-    position: "relative",
-    height: "89px",
-    marginTop: "-31px",
-    border: 0,
-    background:
-      "transparent",
-    color: "#71808a",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent:
-      "flex-start",
-    gap: "3px",
-    cursor: "pointer",
-    minWidth: 0,
-  },
-
-  telegramCircle: {
-    width: "68px",
-    height: "68px",
-    borderRadius: "50%",
-    border:
-      "4px solid #fff",
-    background:
-      "linear-gradient(145deg,#229ED9,#168ACB,#0F79B7)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    boxShadow:
-      "0 10px 28px rgba(34,158,217,.30), 0 3px 8px rgba(0,0,0,.08)",
-    animation:
-      "telegramFloat 2.8s ease-in-out infinite",
-  },
-
-  /* COMING SOON */
-
-  comingOverlay: {
-    position: "fixed",
-    inset: 0,
-    zIndex: 9999,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "20px",
-    background:
-      "rgba(10,25,35,.48)",
-    backdropFilter:
-      "blur(7px)",
-    WebkitBackdropFilter:
-      "blur(7px)",
-  },
-
-  comingModal: {
-    position: "relative",
-    width: "min(100%, 350px)",
-    padding: "27px 21px 21px",
-    borderRadius: "25px",
-    background: "#fff",
-    textAlign: "center",
-    boxShadow:
-      "0 25px 70px rgba(10,30,45,.25)",
-    animation:
-      "modalIn .25s ease both",
-  },
-
-  comingClose: {
-    position: "absolute",
-    top: "9px",
-    right: "11px",
-    width: "29px",
-    height: "29px",
-    border: 0,
-    borderRadius: "50%",
-    background: "#f1f5f7",
-    color: "#64748b",
-    fontSize: "20px",
-    cursor: "pointer",
-  },
-
-  comingIcon: {
-    width: "66px",
-    height: "66px",
-    margin:
-      "0 auto 13px",
-    borderRadius: "21px",
-    background:
-      "linear-gradient(135deg,#f0e7ff,#e8f0ff)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "29px",
-  },
-
-  comingButton: {
-    width: "100%",
-    marginTop: "18px",
-    padding: "11px",
-    border: 0,
-    borderRadius: "12px",
-    background:
-      "linear-gradient(90deg,#155eef,#6d28d9)",
-    color: "#fff",
-    fontSize: "10px",
-    fontWeight: 850,
-    cursor: "pointer",
   },
 };
