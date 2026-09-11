@@ -849,10 +849,25 @@ body{
     sans-serif;
 }
 
-button{
-  font:inherit;
-  cursor:pointer;
-  -webkit-tap-highlight-color:transparent;
+.bottom{
+  position:fixed;
+  left:8px;
+  right:8px;
+  bottom:max(8px,env(safe-area-inset-bottom));
+  z-index:99;
+  width:auto;
+  max-width:524px;
+  height:72px;
+  margin:auto;
+  display:grid;
+  grid-template-columns:repeat(5,1fr);
+  align-items:end;
+  padding:4px;
+  border-radius:22px;
+  background:rgba(255,255,255,.97);
+  border:1px solid #e0e9ec;
+  box-shadow:0 15px 40px rgba(15,40,55,.15);
+  backdrop-filter:blur(18px);
 }
 
 .page{
@@ -861,7 +876,7 @@ button{
   min-height:100vh;
   margin:0 auto;
   padding:12px 12px
-    calc(112px + env(safe-area-inset-bottom));
+    calc(155px + env(safe-area-inset-bottom));
 
   background:
     radial-gradient(
