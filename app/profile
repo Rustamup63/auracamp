@@ -1,0 +1,515 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+  {
+    auth: {
+      flowType: "pkce",
+      persistSession: true,
+      autoRefreshToken: true,
+    },
+  }
+);
+
+type Profile = {
+  user_code: string | null;
+  full_name: string | null;
+  email: string | null;
+  wallet_balance: number;
+  pending_balance: number;
+  total_earned: number;
+  total_withdrawn: number;
+};
+
+type Withdrawal = {
+  id: string;
+  amount: number;
+  method: string | null;
+  status: string;
+  created_at: string;
+};
+
+export default function ProfilePage() {
+  const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function load() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      window.location.replace("/login");
+      return;
+    }
+
+    const [p, w] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select(
+          "user_code,full_name,email,wallet_balance,pending_balance,total_earned,total_withdrawn"
+        )
+        .eq("id", user.id)
+        .maybeSingle(),
+
+      supabase
+        .from("withdrawals")
+        .select("id,amount,method,status,created_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(10),
+    ]);
+
+    setProfile(p.data);
+    setWithdrawals(w.data || []);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    async function realtime() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) return;
+
+      channel = supabase
+        .channel("auracamp-profile-" + user.id)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "profiles",
+            filter: `id=eq.${user.id}`,
+          },
+          async () => {
+            const { data } = await supabase
+              .from("profiles")
+              .select(
+                "user_code,full_name,email,wallet_balance,pending_balance,total_earned,total_withdrawn"
+              )
+              .eq("id", user.id)
+              .maybeSingle();
+
+            if (data) setProfile(data);
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "withdrawals",
+            filter: `user_id=eq.${user.id}`,
+          },
+          async () => {
+            const { data } = await supabase
+              .from("withdrawals")
+              .select(
+                "id,amount,method,status,created_at"
+              )
+              .eq("user_id", user.id)
+              .order("created_at", {
+                ascending: false,
+              })
+              .limit(10);
+
+            setWithdrawals(data || []);
+          }
+        )
+        .subscribe();
+    }
+
+    realtime();
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, []);
+
+  async function logout() {
+    await supabase.auth.signOut();
+    window.location.replace("/login");
+  }
+
+  if (loading) {
+    return (
+      <>
+        <style>{css}</style>
+        <main className="loading">
+          Loading profile...
+        </main>
+      </>
+    );
+  }
+
+  const name =
+    profile?.full_name ||
+    profile?.email?.split("@")[0] ||
+    "User";
+
+  return (
+    <>
+      <style>{css}</style>
+
+      <main className="page">
+
+        <header className="top">
+          <button
+            onClick={() =>
+              (window.location.href = "/")
+            }
+          >
+            ←
+          </button>
+
+          <div>
+            <h1>My Profile</h1>
+            <p>Your account & earnings</p>
+          </div>
+
+          <button
+            className="logout"
+            onClick={logout}
+          >
+            Logout
+          </button>
+        </header>
+
+        {/* USER */}
+        <section className="profileHero">
+
+          <div className="avatar">
+            {name.charAt(0).toUpperCase()}
+          </div>
+
+          <h2>{name}</h2>
+
+          <p>{profile?.email || "—"}</p>
+
+          <span className="userCode">
+            {profile?.user_code || "AC----"}
+          </span>
+
+        </section>
+
+        {/* ACCOUNT */}
+        <section className="card">
+
+          <h2>Account Information</h2>
+          <p className="muted">
+            Your registered account details.
+          </p>
+
+          <Row
+            label="Full Name"
+            value={profile?.full_name || "Not set"}
+          />
+
+          <Row
+            label="Email"
+            value={profile?.email || "—"}
+          />
+
+          <Row
+            label="AURA CAMP ID"
+            value={profile?.user_code || "AC----"}
+          />
+
+        </section>
+
+        {/* STATS */}
+        <section className="stats">
+
+          <Stat
+            label="Available"
+            value={`₹${Number(
+              profile?.wallet_balance || 0
+            ).toFixed(2)}`}
+          />
+
+          <Stat
+            label="Pending"
+            value={`₹${Number(
+              profile?.pending_balance || 0
+            ).toFixed(2)}`}
+          />
+
+          <Stat
+            label="Total Earned"
+            value={`₹${Number(
+              profile?.total_earned || 0
+            ).toFixed(2)}`}
+          />
+
+          <Stat
+            label="Withdrawn"
+            value={`₹${Number(
+              profile?.total_withdrawn || 0
+            ).toFixed(2)}`}
+          />
+
+        </section>
+
+        {/* WITHDRAWALS */}
+        <section className="card">
+
+          <div className="titleRow">
+            <div>
+              <h2>Withdrawal History</h2>
+              <p className="muted">
+                Your payment requests
+              </p>
+            </div>
+
+            <button
+              className="darkButton"
+              onClick={() =>
+                (window.location.href =
+                  "/withdraw")
+              }
+            >
+              Withdraw
+            </button>
+          </div>
+
+          {withdrawals.length === 0 ? (
+            <div className="empty">
+              No withdrawals yet.
+            </div>
+          ) : (
+            <div className="history">
+              {withdrawals.map((item) => (
+                <div
+                  className="historyRow"
+                  key={item.id}
+                >
+                  <div>
+                    <strong>
+                      ₹{Number(
+                        item.amount
+                      ).toFixed(2)}
+                    </strong>
+
+                    <small>
+                      {formatDate(
+                        item.created_at
+                      )}
+                    </small>
+                  </div>
+
+                  <Status
+                    status={item.status}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+        </section>
+
+        {/* ACTIONS */}
+        <section className="actions">
+
+          <button
+            onClick={() =>
+              (window.location.href =
+                "/my-offers")
+            }
+          >
+            🎁 My Offers
+          </button>
+
+          <button
+            onClick={() =>
+              (window.location.href =
+                "/transactions")
+            }
+          >
+            💳 Transactions
+          </button>
+
+          <button
+            onClick={() =>
+              (window.location.href =
+                "/support")
+            }
+          >
+            🎧 Support
+          </button>
+
+          <button
+            onClick={() =>
+              (window.location.href =
+                "https://t.me/Auracampaign")
+            }
+          >
+            ✈ Telegram
+          </button>
+
+        </section>
+
+        {/* BOTTOM */}
+        <nav className="bottom">
+
+          <button
+            onClick={() =>
+              (window.location.href = "/")
+            }
+          >
+            <span>⌂</span>
+            <small>Home</small>
+          </button>
+
+          <button
+            onClick={() =>
+              (window.location.href =
+                "/#offers")
+            }
+          >
+            <span>▦</span>
+            <small>Offers</small>
+          </button>
+
+          <button
+            className="telegram"
+            onClick={() =>
+              (window.location.href =
+                "https://t.me/Auracampaign")
+            }
+          >
+            <span>✈</span>
+            <small>Telegram</small>
+          </button>
+
+          <button
+            onClick={() =>
+              (window.location.href =
+                "/my-offers")
+            }
+          >
+            <span>▤</span>
+            <small>My Offers</small>
+          </button>
+
+          <button className="active">
+            <span>♙</span>
+            <small>Profile</small>
+          </button>
+
+        </nav>
+
+      </main>
+    </>
+  );
+}
+
+function Row({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="row">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="stat">
+      <small>{label}</small>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function Status({
+  status,
+}: {
+  status: string;
+}) {
+  const s = status.toLowerCase();
+
+  if (
+    s === "approved" ||
+    s === "paid" ||
+    s === "success" ||
+    s === "completed"
+  ) {
+    return (
+      <span className="paid">
+        ✓ Paid
+      </span>
+    );
+  }
+
+  if (
+    s === "rejected" ||
+    s === "failed"
+  ) {
+    return (
+      <span className="rejected">
+        ✕ Rejected
+      </span>
+    );
+  }
+
+  return (
+    <span className="pending">
+      ◷ Pending
+    </span>
+  );
+}
+
+function formatDate(value: string) {
+  return new Date(value).toLocaleString(
+    "en-IN",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }
+  );
+}
+
+const css = `
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;overflow-x:hidden}
+body{background:#f3fafb;font-family:Inter,system-ui,sans-serif;color:#17202b}
+button{font:inherit;-webkit-tap-highlight-color:transparent}
+.page{min-height:100vh;max-width:540px;margin:auto;padding:10px 10px 105px;background:linear-gradient(145deg,#f1fbfc,#f7fbff 55%,#faf7ff)}
+.top{display:flex;align-items:center;gap:9px;margin-bottom:12px}.top>button{width:43px;height:43px;border:1px solid #e1e8ed;border-radius:13px;background:#fff;font-size:22px}.top>div{flex:1}.top h1{margin:0;font-size:21px}.top p{margin:3px 0;color:#7d8792;font-size:9px}.top .logout{width:auto;height:auto;padding:9px 10px;color:#fff;background:#132f3f;font-size:8px}
+.profileHero{padding:24px 15px;text-align:center;border:1px solid #e1eaed;border-radius:22px;background:linear-gradient(135deg,#fff,#f5fbfc,#f5f0ff);box-shadow:0 10px 30px rgba(20,60,80,.06);margin-bottom:10px}.avatar{width:70px;height:70px;margin:auto;display:flex;align-items:center;justify-content:center;border-radius:21px;color:#fff;background:linear-gradient(135deg,#155eef,#16a34a);font-size:27px;font-weight:900}.profileHero h2{margin:12px 0 3px;font-size:22px}.profileHero p{margin:0;color:#7c8992;font-size:10px}.userCode{display:inline-block;margin-top:10px;padding:6px 10px;border-radius:999px;color:#166534;background:#ecfdf5;font-size:9px;font-weight:850}
+.card{padding:16px;border:1px solid #e1eaed;border-radius:18px;background:#fff;margin-bottom:10px}.card h2{margin:0;font-size:15px}.muted{margin:4px 0 12px;color:#84919a;font-size:9px}.row{display:flex;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid #eef2f3}.row:last-child{border:0}.row span{color:#7c8992;font-size:9px}.row strong{max-width:65%;text-align:right;overflow-wrap:anywhere;font-size:9px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}.stat{padding:14px;border:1px solid #e1eaed;border-radius:16px;background:#fff}.stat small{display:block;color:#84919a;font-size:8px}.stat strong{display:block;margin-top:4px;font-size:18px}
+.titleRow{display:flex;align-items:center;justify-content:space-between;gap:8px}.darkButton{border:0;border-radius:9px;padding:8px 10px;color:#fff;background:#132f3f;font-size:8px;font-weight:800}.historyRow{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-top:1px solid #eef2f3}.historyRow strong,.historyRow small{display:block}.historyRow strong{font-size:12px}.historyRow small{margin-top:3px;color:#98a5ad;font-size:8px}.paid,.pending,.rejected{padding:6px 9px;border-radius:999px;font-size:8px;font-weight:850}.paid{color:#047857;background:#ecfdf5}.pending{color:#a16207;background:#fef9c3}.rejected{color:#dc2626;background:#fef2f2}.empty{text-align:center;padding:20px 0 4px;color:#84919a;font-size:9px}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.actions button{padding:13px 8px;border:1px solid #e1eaed;border-radius:14px;background:#fff;font-size:9px;font-weight:750}
+.bottom{position:fixed;left:8px;right:8px;bottom:max(8px,env(safe-area-inset-bottom));z-index:99;height:72px;display:grid;grid-template-columns:repeat(5,1fr);padding:4px;border-radius:22px;background:rgba(255,255,255,.97);border:1px solid #e0e9ec;box-shadow:0 15px 40px rgba(15,40,55,.15);backdrop-filter:blur(18px)}.bottom button{border:0;background:transparent;color:#7c8790;font-size:20px}.bottom small{display:block;margin-top:2px;font-size:7px}.bottom .active{color:#155eef}.bottom .telegram{width:58px;height:58px;margin-top:-20px;align-self:start;justify-self:center;border-radius:50%;color:#fff;background:linear-gradient(145deg,#155eef,#16a34a);border:4px solid #fff;box-shadow:0 9px 25px rgba(21,94,239,.28)}
+.loading{min-height:100vh;display:flex;align-items:center;justify-content:center;color:#71808a;font-size:10px}
+@media(min-width:801px){.bottom{width:524px;left:50%;right:auto;transform:translateX(-50%)}}
+`;
