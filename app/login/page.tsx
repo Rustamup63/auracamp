@@ -31,27 +31,25 @@ export default function LoginPage() {
   const [messageType, setMessageType] =
     useState<"success" | "error">("error");
 
-  const [logoFailed, setLogoFailed] = useState(false);
-
   useEffect(() => {
-    let mounted = true;
+    let active = true;
 
-    async function checkSession() {
+    async function checkExistingSession() {
       const {
         data: { session },
       } = await supabase.auth.getSession();
 
-      if (!mounted) return;
+      if (!active) return;
 
       if (session?.user) {
         window.location.replace("/");
       }
     }
 
-    checkSession();
+    checkExistingSession();
 
     return () => {
-      mounted = false;
+      active = false;
     };
   }, []);
 
@@ -63,7 +61,7 @@ export default function LoginPage() {
     setMessageType(type);
   }
 
-  function changeMode(nextMode: Mode) {
+  function switchMode(nextMode: Mode) {
     setMode(nextMode);
     setMessage("");
     setPassword("");
@@ -112,6 +110,10 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      /* =========================
+         LOGIN
+      ========================= */
+
       if (mode === "login") {
         const { data, error } =
           await supabase.auth.signInWithPassword({
@@ -120,18 +122,20 @@ export default function LoginPage() {
           });
 
         if (error) {
-          const text =
+          const errorText =
             error.message.toLowerCase();
 
           if (
-            text.includes("email not confirmed")
+            errorText.includes("email not confirmed")
           ) {
             showMessage(
               "Please verify your email before signing in.",
               "error"
             );
           } else if (
-            text.includes("invalid login credentials")
+            errorText.includes(
+              "invalid login credentials"
+            )
           ) {
             showMessage(
               "Incorrect email or password.",
@@ -154,7 +158,9 @@ export default function LoginPage() {
         return;
       }
 
-      /* REGISTER */
+      /* =========================
+         REGISTER
+      ========================= */
 
       const { data, error } =
         await supabase.auth.signUp({
@@ -170,12 +176,14 @@ export default function LoginPage() {
         });
 
       if (error) {
-        const text =
+        const errorText =
           error.message.toLowerCase();
 
         if (
-          text.includes("already registered") ||
-          text.includes("user already registered")
+          errorText.includes("already registered") ||
+          errorText.includes(
+            "user already registered"
+          )
         ) {
           showMessage(
             "An account with this email already exists. Please sign in.",
@@ -193,7 +201,7 @@ export default function LoginPage() {
 
       /*
        * Email confirmation is enabled.
-       * Supabase gives a user but no session.
+       * User exists but session is not available.
        */
       if (data.user && !data.session) {
         showMessage(
@@ -205,7 +213,7 @@ export default function LoginPage() {
       }
 
       /*
-       * Email confirmation is disabled.
+       * Email confirmation disabled.
        */
       if (data.session) {
         window.location.replace("/");
@@ -219,6 +227,10 @@ export default function LoginPage() {
       setLoading(false);
     }
   }
+
+  /* =========================
+     GOOGLE LOGIN
+  ========================= */
 
   async function googleSignIn() {
     if (loading) return;
@@ -253,6 +265,10 @@ export default function LoginPage() {
       setLoading(false);
     }
   }
+
+  /* =========================
+     FORGOT PASSWORD
+  ========================= */
 
   async function forgotPassword() {
     if (loading) return;
@@ -303,73 +319,42 @@ export default function LoginPage() {
     }
   }
 
-  function Logo({
-    small = false,
-  }: {
-    small?: boolean;
-  }) {
-    if (logoFailed) {
-      return (
-        <div
-          className={
-            small
-              ? "fallback-logo small"
-              : "fallback-logo"
-          }
-        >
-          <span>A</span>
-        </div>
-      );
-    }
-
-    return (
-      <img
-        src="/aura-camp-logo.png"
-        alt="Aura Camp"
-        className={
-          small
-            ? "logo-image small"
-            : "logo-image"
-        }
-        onError={() => setLogoFailed(true)}
-      />
-    );
-  }
-
   return (
     <>
       <style>{styles}</style>
 
       <main className="auth-page">
+
         <div className="auth-container">
 
-          {/* BRAND */}
-          <div className="brand">
-            <Logo />
+          {/* =================================
+              ONLY ONE LOGO
+          ================================= */}
+
+          <div className="logo-wrap">
+            <img
+              src="/aura-camp-logo.png"
+              alt="Aura Camp"
+              className="logo"
+            />
           </div>
 
-          {/* MAIN CARD */}
+          {/* =================================
+              AUTH CARD
+          ================================= */}
+
           <section className="auth-card">
 
-            {/* APP LOGO */}
-            <div className="logo-box">
-              <Logo small />
-            </div>
-
-            {/* TITLE */}
             <div className="heading">
 
               <span className="eyebrow">
                 {mode === "login"
                   ? "WELCOME BACK"
-                  : "JOIN AURA CAMP"}
+                  : "WELCOME TO AURA CAMP"}
               </span>
 
-              <h1>
-                {mode === "login"
-                  ? "Welcome Back"
-                  : "Create Account"}
-              </h1>
+              {/* Welcome Back removed */}
+              <h1>Aura Camp</h1>
 
               <p>
                 {mode === "login"
@@ -379,7 +364,10 @@ export default function LoginPage() {
 
             </div>
 
-            {/* MESSAGE */}
+            {/* =================================
+                SUCCESS / ERROR MESSAGE
+            ================================= */}
+
             {message && (
               <div
                 className={
@@ -398,25 +386,29 @@ export default function LoginPage() {
               </div>
             )}
 
-            {/* FORM */}
+            {/* =================================
+                FORM
+            ================================= */}
+
             <form onSubmit={handleSubmit}>
 
-              {/* NAME */}
+              {/* FULL NAME */}
+
               {mode === "register" && (
                 <label>
+
                   <span>Full Name</span>
 
                   <div className="input-box">
+
                     <span className="input-icon">
-                      <svg
-                        viewBox="0 0 24 24"
-                        aria-hidden="true"
-                      >
+                      <svg viewBox="0 0 24 24">
                         <circle
                           cx="12"
                           cy="8"
                           r="4"
                         />
+
                         <path
                           d="M4 21c.8-4 3.5-6 8-6s7.2 2 8 6"
                         />
@@ -432,20 +424,22 @@ export default function LoginPage() {
                       }
                       autoComplete="name"
                     />
+
                   </div>
+
                 </label>
               )}
 
               {/* EMAIL */}
+
               <label>
+
                 <span>Email Address</span>
 
                 <div className="input-box">
+
                   <span className="input-icon">
-                    <svg
-                      viewBox="0 0 24 24"
-                      aria-hidden="true"
-                    >
+                    <svg viewBox="0 0 24 24">
                       <rect
                         x="3"
                         y="5"
@@ -453,6 +447,7 @@ export default function LoginPage() {
                         height="14"
                         rx="2"
                       />
+
                       <path d="m3 7 9 6 9-6" />
                     </svg>
                   </span>
@@ -466,12 +461,17 @@ export default function LoginPage() {
                     }
                     autoComplete="email"
                   />
+
                 </div>
+
               </label>
 
               {/* PASSWORD */}
+
               <label>
+
                 <div className="password-heading">
+
                   <span>Password</span>
 
                   {mode === "login" && (
@@ -483,14 +483,13 @@ export default function LoginPage() {
                       Forgot password?
                     </button>
                   )}
+
                 </div>
 
                 <div className="input-box">
+
                   <span className="input-icon">
-                    <svg
-                      viewBox="0 0 24 24"
-                      aria-hidden="true"
-                    >
+                    <svg viewBox="0 0 24 24">
                       <rect
                         x="5"
                         y="10"
@@ -498,6 +497,7 @@ export default function LoginPage() {
                         height="10"
                         rx="2"
                       />
+
                       <path d="M8 10V7a4 4 0 0 1 8 0v3" />
                     </svg>
                   </span>
@@ -536,9 +536,11 @@ export default function LoginPage() {
                         : "Show password"
                     }
                   >
+
                     {showPassword ? (
                       <svg viewBox="0 0 24 24">
                         <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" />
+
                         <circle
                           cx="12"
                           cy="12"
@@ -548,20 +550,27 @@ export default function LoginPage() {
                     ) : (
                       <svg viewBox="0 0 24 24">
                         <path d="M3 3l18 18" />
+
                         <path d="M10.6 6.2A10.5 10.5 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-3.1 3.8" />
+
                         <path d="M6.2 6.3C3.5 8.2 2 12 2 12s3.5 6 10 6c1.2 0 2.3-.2 3.2-.5" />
                       </svg>
                     )}
+
                   </button>
+
                 </div>
+
               </label>
 
-              {/* PRIMARY BUTTON */}
+              {/* SIGN IN / REGISTER */}
+
               <button
                 type="submit"
                 className="primary-button"
                 disabled={loading}
               >
+
                 <span>
                   {loading
                     ? "Please wait..."
@@ -573,24 +582,38 @@ export default function LoginPage() {
                 {!loading && (
                   <b>→</b>
                 )}
+
               </button>
 
             </form>
 
-            {/* DIVIDER */}
+            {/* =================================
+                DIVIDER
+            ================================= */}
+
             <div className="divider">
+
               <span />
-              <b>or continue with</b>
+
+              <b>
+                or continue with
+              </b>
+
               <span />
+
             </div>
 
-            {/* GOOGLE */}
+            {/* =================================
+                GOOGLE
+            ================================= */}
+
             <button
               type="button"
               className="google-button"
               onClick={googleSignIn}
               disabled={loading}
             >
+
               <span className="google-logo">
                 G
               </span>
@@ -598,9 +621,13 @@ export default function LoginPage() {
               <span>
                 Continue with Google
               </span>
+
             </button>
 
-            {/* ACCOUNT SWITCH */}
+            {/* =================================
+                SWITCH LOGIN / REGISTER
+            ================================= */}
+
             <div className="switch-account">
 
               <span>
@@ -612,7 +639,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() =>
-                  changeMode(
+                  switchMode(
                     mode === "login"
                       ? "register"
                       : "login"
@@ -628,33 +655,48 @@ export default function LoginPage() {
 
           </section>
 
-          {/* TERMS */}
+          {/* =================================
+              TERMS
+          ================================= */}
+
           <p className="terms">
+
             By continuing, you agree to our{" "}
+
             <a href="/terms">
               Terms of Service
             </a>{" "}
+
             and{" "}
+
             <a href="/privacy">
               Privacy Policy
             </a>
+
             .
+
           </p>
 
-          {/* SECURITY */}
+          {/* =================================
+              SECURITY
+          ================================= */}
+
           <div className="security">
+
             <span>
-              <i>✓</i> Secure Login
+              ✓ Secure Login
             </span>
 
             <b>•</b>
 
             <span>
-              <i>⚡</i> Fast & Easy
+              ⚡ Fast & Easy
             </span>
+
           </div>
 
         </div>
+
       </main>
     </>
   );
@@ -697,6 +739,10 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* =========================================
+   PAGE
+========================================= */
+
 .auth-page {
   min-height: 100svh;
 
@@ -704,7 +750,7 @@ button {
   justify-content: center;
 
   padding:
-    24px 14px 32px;
+    24px 14px 34px;
 
   background:
     radial-gradient(
@@ -724,87 +770,74 @@ button {
     );
 }
 
+/* =========================================
+   CONTAINER
+========================================= */
+
 .auth-container {
   width: min(470px, 100%);
 }
 
-.brand {
+/* =========================================
+   SINGLE LOGO
+========================================= */
+
+.logo-wrap {
+  width: 82px;
+  height: 82px;
+
+  margin:
+    0 auto 18px;
+
   display: flex;
-  justify-content: center;
   align-items: center;
+  justify-content: center;
 
-  min-height: 68px;
+  overflow: hidden;
 
-  margin-bottom: 14px;
+  border:
+    1px solid
+    rgba(215,226,230,.9);
+
+  border-radius: 23px;
+
+  background: #ffffff;
+
+  box-shadow:
+    0 13px 32px
+    rgba(30,80,90,.10);
+
+  animation:
+    logoEnter .6s ease both;
 }
 
-.logo-image {
-  width: 205px;
-  height: 72px;
+.logo {
+  width: 75px;
+  height: 75px;
 
   display: block;
 
   object-fit: contain;
 }
 
-.logo-image.small {
-  width: 58px;
-  height: 58px;
-}
-
-.fallback-logo {
-  width: 66px;
-  height: 66px;
-
-  display: grid;
-  place-items: center;
-
-  border-radius: 20px;
-
-  color: white;
-
-  background:
-    linear-gradient(
-      135deg,
-      #111c26,
-      #10b981
-    );
-
-  box-shadow:
-    0 12px 28px
-    rgba(15,80,70,.18);
-}
-
-.fallback-logo span {
-  font-size: 35px;
-  font-weight: 850;
-}
-
-.fallback-logo.small {
-  width: 58px;
-  height: 58px;
-
-  border-radius: 17px;
-}
-
-.fallback-logo.small span {
-  font-size: 31px;
-}
+/* =========================================
+   CARD
+========================================= */
 
 .auth-card {
   width: 100%;
 
   padding:
-    27px 27px 25px;
+    29px 27px 25px;
 
   border:
     1px solid
     rgba(215,226,230,.95);
 
-  border-radius: 27px;
+  border-radius: 28px;
 
   background:
-    rgba(255,255,255,.96);
+    rgba(255,255,255,.97);
 
   box-shadow:
     0 25px 70px
@@ -812,44 +845,31 @@ button {
 
     0 4px 14px
     rgba(24,55,74,.035);
+
+  animation:
+    cardEnter .55s ease both;
 }
 
-.logo-box {
-  width: 66px;
-  height: 66px;
-
-  margin:
-    0 auto 15px;
-
-  display: grid;
-  place-items: center;
-
-  overflow: hidden;
-
-  border:
-    1px solid #edf1f2;
-
-  border-radius: 20px;
-
-  background: white;
-
-  box-shadow:
-    0 10px 28px
-    rgba(25,60,75,.09);
-}
+/* =========================================
+   HEADING
+========================================= */
 
 .heading {
   text-align: center;
+
+  animation:
+    headingEnter .65s ease both;
 }
 
 .eyebrow {
   display: block;
 
-  margin-bottom: 5px;
+  margin-bottom: 6px;
 
-  color: #71838d;
+  color: #70828c;
 
   font-size: 9px;
+
   font-weight: 900;
 
   letter-spacing: 1.7px;
@@ -861,7 +881,7 @@ button {
   color: #172033;
 
   font-size:
-    clamp(31px, 8vw, 39px);
+    clamp(32px, 8vw, 40px);
 
   line-height: 1.08;
 
@@ -872,7 +892,7 @@ button {
   max-width: 350px;
 
   margin:
-    9px auto 23px;
+    9px auto 24px;
 
   color: #788993;
 
@@ -881,6 +901,10 @@ button {
   line-height: 1.55;
 }
 
+/* =========================================
+   MESSAGE
+========================================= */
+
 .message {
   display: flex;
   align-items: flex-start;
@@ -888,14 +912,20 @@ button {
   gap: 9px;
 
   margin-bottom: 16px;
-  padding: 11px 12px;
+
+  padding:
+    11px 12px;
 
   border-radius: 12px;
 
   font-size: 11px;
+
   font-weight: 650;
 
   line-height: 1.45;
+
+  animation:
+    messageEnter .25s ease both;
 }
 
 .message > span {
@@ -938,50 +968,37 @@ button {
   background: #ffe2df;
 }
 
+/* =========================================
+   FORM
+========================================= */
+
 form {
   display: grid;
+
   gap: 16px;
 }
 
 label {
   display: grid;
+
   gap: 7px;
 
   color: #273444;
 
   font-size: 11px;
+
   font-weight: 850;
 }
 
-.password-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.password-heading button {
-  padding: 0;
-
-  border: 0;
-
-  background: transparent;
-
-  color: #1777b6;
-
-  font-size: 10px;
-  font-weight: 850;
-
-  cursor: pointer;
-}
-
-.password-heading button:disabled {
-  opacity: .5;
-}
+/* =========================================
+   INPUT
+========================================= */
 
 .input-box {
   height: 56px;
 
   display: flex;
+
   align-items: center;
 
   border:
@@ -992,8 +1009,8 @@ label {
   background: #fbfdfe;
 
   transition:
-    border-color .15s ease,
-    box-shadow .15s ease;
+    border-color .18s ease,
+    box-shadow .18s ease;
 }
 
 .input-box:focus-within {
@@ -1010,6 +1027,7 @@ label {
   flex: 0 0 44px;
 
   display: grid;
+
   place-items: center;
 
   color: #8a99a3;
@@ -1026,6 +1044,7 @@ label {
   stroke-width: 1.7;
 
   stroke-linecap: round;
+
   stroke-linejoin: round;
 }
 
@@ -1052,6 +1071,34 @@ label {
   color: #a0adb6;
 }
 
+/* =========================================
+   PASSWORD
+========================================= */
+
+.password-heading {
+  display: flex;
+
+  align-items: center;
+
+  justify-content: space-between;
+}
+
+.password-heading button {
+  padding: 0;
+
+  border: 0;
+
+  background: transparent;
+
+  color: #1777b6;
+
+  font-size: 10px;
+
+  font-weight: 850;
+
+  cursor: pointer;
+}
+
 .show-password {
   width: 43px;
   height: 100%;
@@ -1059,6 +1106,7 @@ label {
   flex: 0 0 43px;
 
   display: grid;
+
   place-items: center;
 
   padding: 0;
@@ -1083,15 +1131,22 @@ label {
   stroke-width: 1.7;
 
   stroke-linecap: round;
+
   stroke-linejoin: round;
 }
+
+/* =========================================
+   PRIMARY BUTTON
+========================================= */
 
 .primary-button {
   width: 100%;
   height: 55px;
 
   display: flex;
+
   align-items: center;
+
   justify-content: center;
 
   gap: 9px;
@@ -1116,21 +1171,28 @@ label {
     rgba(21,48,65,.16);
 
   font-size: 13px;
+
   font-weight: 850;
 
   cursor: pointer;
 
   transition:
-    transform .15s ease,
-    box-shadow .15s ease;
+    transform .18s ease,
+    box-shadow .18s ease;
 }
 
 .primary-button:hover {
-  transform: translateY(-1px);
+  transform:
+    translateY(-1px);
 
   box-shadow:
-    0 14px 28px
+    0 15px 28px
     rgba(21,48,65,.20);
+}
+
+.primary-button:active {
+  transform:
+    translateY(0);
 }
 
 .primary-button:disabled {
@@ -1145,8 +1207,13 @@ label {
   font-size: 17px;
 }
 
+/* =========================================
+   DIVIDER
+========================================= */
+
 .divider {
   display: flex;
+
   align-items: center;
 
   gap: 10px;
@@ -1167,17 +1234,24 @@ label {
   color: #8b98a1;
 
   font-size: 9px;
+
   font-weight: 700;
 
   white-space: nowrap;
 }
+
+/* =========================================
+   GOOGLE
+========================================= */
 
 .google-button {
   width: 100%;
   height: 55px;
 
   display: flex;
+
   align-items: center;
+
   justify-content: center;
 
   gap: 10px;
@@ -1187,18 +1261,20 @@ label {
 
   border-radius: 15px;
 
-  background: white;
+  background: #ffffff;
 
   color: #172033;
 
   font-size: 12px;
+
   font-weight: 800;
 
   cursor: pointer;
 
   transition:
-    background .15s ease,
-    box-shadow .15s ease;
+    background .18s ease,
+    box-shadow .18s ease,
+    transform .18s ease;
 }
 
 .google-button:hover {
@@ -1207,6 +1283,9 @@ label {
   box-shadow:
     0 7px 18px
     rgba(20,40,60,.06);
+
+  transform:
+    translateY(-1px);
 }
 
 .google-button:disabled {
@@ -1220,6 +1299,7 @@ label {
   height: 30px;
 
   display: grid;
+
   place-items: center;
 
   border:
@@ -1232,12 +1312,19 @@ label {
   background: white;
 
   font-size: 17px;
+
   font-weight: 900;
 }
 
+/* =========================================
+   SWITCH ACCOUNT
+========================================= */
+
 .switch-account {
   display: flex;
+
   align-items: center;
+
   justify-content: center;
 
   gap: 5px;
@@ -1258,11 +1345,16 @@ label {
 
   color: #1777b6;
 
-  font-size: 13px;
+  font-size: 14px;
+
   font-weight: 850;
 
   cursor: pointer;
 }
+
+/* =========================================
+   TERMS
+========================================= */
 
 .terms {
   max-width: 400px;
@@ -1285,9 +1377,15 @@ label {
   font-weight: 750;
 }
 
+/* =========================================
+   SECURITY
+========================================= */
+
 .security {
   display: flex;
+
   align-items: center;
+
   justify-content: center;
 
   gap: 8px;
@@ -1297,31 +1395,87 @@ label {
   color: #8c989f;
 
   font-size: 8px;
-  font-weight: 700;
-}
 
-.security i {
-  font-style: normal;
+  font-weight: 700;
 }
 
 .security b {
   color: #c1c9ce;
 }
 
-@media (min-width: 700px) {
+/* =========================================
+   ANIMATIONS
+========================================= */
 
-  .auth-page {
-    align-items: center;
+@keyframes logoEnter {
+  from {
+    opacity: 0;
 
-    padding:
-      35px 20px;
+    transform:
+      translateY(-10px)
+      scale(.94);
   }
 
-  .auth-card {
-    padding:
-      31px 35px 28px;
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0)
+      scale(1);
   }
 }
+
+@keyframes cardEnter {
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+}
+
+@keyframes headingEnter {
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+}
+
+@keyframes messageEnter {
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+}
+
+/* =========================================
+   MOBILE
+========================================= */
 
 @media (max-width: 430px) {
 
@@ -1330,13 +1484,16 @@ label {
       17px 12px 27px;
   }
 
-  .brand {
-    min-height: 64px;
+  .logo-wrap {
+    width: 72px;
+    height: 72px;
+
+    margin-bottom: 15px;
   }
 
-  .logo-image {
-    width: 185px;
-    height: 65px;
+  .logo {
+    width: 66px;
+    height: 66px;
   }
 
   .auth-card {
@@ -1346,18 +1503,8 @@ label {
     border-radius: 24px;
   }
 
-  .logo-box {
-    width: 61px;
-    height: 61px;
-  }
-
-  .logo-image.small {
-    width: 54px;
-    height: 54px;
-  }
-
   .heading h1 {
-    font-size: 31px;
+    font-size: 32px;
   }
 
   .heading p {
@@ -1375,9 +1522,13 @@ label {
   }
 
   .switch-account button {
-    font-size: 13px;
+    font-size: 14px;
   }
 }
+
+/* =========================================
+   SMALL PHONES
+========================================= */
 
 @media (max-width: 350px) {
 
@@ -1386,8 +1537,33 @@ label {
     padding-right: 15px;
   }
 
-  .logo-image {
-    width: 165px;
+  .logo-wrap {
+    width: 68px;
+    height: 68px;
+  }
+
+  .logo {
+    width: 62px;
+    height: 62px;
+  }
+}
+
+/* =========================================
+   DESKTOP
+========================================= */
+
+@media (min-width: 700px) {
+
+  .auth-page {
+    align-items: center;
+
+    padding:
+      35px 20px;
+  }
+
+  .auth-card {
+    padding:
+      31px 35px 28px;
   }
 }
 
