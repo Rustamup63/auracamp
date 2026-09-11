@@ -15,6 +15,8 @@ const supabase = createClient(
   }
 );
 
+const LOGO_URL = "https://files.catbox.moe/bighpk.png";
+
 type Mode = "login" | "register";
 
 export default function LoginPage() {
@@ -34,7 +36,7 @@ export default function LoginPage() {
   useEffect(() => {
     let active = true;
 
-    async function checkExistingSession() {
+    async function checkSession() {
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -46,7 +48,7 @@ export default function LoginPage() {
       }
     }
 
-    checkExistingSession();
+    checkSession();
 
     return () => {
       active = false;
@@ -110,9 +112,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      /* =========================
-         LOGIN
-      ========================= */
+      /* LOGIN */
 
       if (mode === "login") {
         const { data, error } =
@@ -158,9 +158,7 @@ export default function LoginPage() {
         return;
       }
 
-      /* =========================
-         REGISTER
-      ========================= */
+      /* REGISTER */
 
       const { data, error } =
         await supabase.auth.signUp({
@@ -199,10 +197,6 @@ export default function LoginPage() {
         return;
       }
 
-      /*
-       * Email confirmation is enabled.
-       * User exists but session is not available.
-       */
       if (data.user && !data.session) {
         showMessage(
           "Account created successfully. Please check your email and verify your account.",
@@ -212,9 +206,6 @@ export default function LoginPage() {
         return;
       }
 
-      /*
-       * Email confirmation disabled.
-       */
       if (data.session) {
         window.location.replace("/");
       }
@@ -228,9 +219,7 @@ export default function LoginPage() {
     }
   }
 
-  /* =========================
-     GOOGLE LOGIN
-  ========================= */
+  /* GOOGLE LOGIN */
 
   async function googleSignIn() {
     if (loading) return;
@@ -266,9 +255,7 @@ export default function LoginPage() {
     }
   }
 
-  /* =========================
-     FORGOT PASSWORD
-  ========================= */
+  /* FORGOT PASSWORD */
 
   async function forgotPassword() {
     if (loading) return;
@@ -324,36 +311,30 @@ export default function LoginPage() {
       <style>{styles}</style>
 
       <main className="auth-page">
-
         <div className="auth-container">
 
-          {/* =================================
-              ONLY ONE LOGO
-          ================================= */}
-
+          {/* ONLY ONE LOGO */}
           <div className="logo-wrap">
             <img
-              src="/aura-camp-logo.png"
+              src={LOGO_URL}
               alt="Aura Camp"
               className="logo"
+              loading="eager"
+              fetchPriority="high"
+              decoding="async"
             />
           </div>
 
-          {/* =================================
-              AUTH CARD
-          ================================= */}
-
+          {/* LOGIN CARD */}
           <section className="auth-card">
 
             <div className="heading">
-
               <span className="eyebrow">
                 {mode === "login"
                   ? "WELCOME BACK"
                   : "WELCOME TO AURA CAMP"}
               </span>
 
-              {/* Welcome Back removed */}
               <h1>Aura Camp</h1>
 
               <p>
@@ -361,12 +342,9 @@ export default function LoginPage() {
                   ? "Sign in to continue your earning journey."
                   : "Create your account and start earning rewards."}
               </p>
-
             </div>
 
-            {/* =================================
-                SUCCESS / ERROR MESSAGE
-            ================================= */}
+            {/* MESSAGE */}
 
             {message && (
               <div
@@ -386,21 +364,17 @@ export default function LoginPage() {
               </div>
             )}
 
-            {/* =================================
-                FORM
-            ================================= */}
+            {/* FORM */}
 
             <form onSubmit={handleSubmit}>
 
-              {/* FULL NAME */}
+              {/* NAME */}
 
               {mode === "register" && (
                 <label>
-
                   <span>Full Name</span>
 
                   <div className="input-box">
-
                     <span className="input-icon">
                       <svg viewBox="0 0 24 24">
                         <circle
@@ -424,20 +398,16 @@ export default function LoginPage() {
                       }
                       autoComplete="name"
                     />
-
                   </div>
-
                 </label>
               )}
 
               {/* EMAIL */}
 
               <label>
-
                 <span>Email Address</span>
 
                 <div className="input-box">
-
                   <span className="input-icon">
                     <svg viewBox="0 0 24 24">
                       <rect
@@ -461,17 +431,13 @@ export default function LoginPage() {
                     }
                     autoComplete="email"
                   />
-
                 </div>
-
               </label>
 
               {/* PASSWORD */}
 
               <label>
-
                 <div className="password-heading">
-
                   <span>Password</span>
 
                   {mode === "login" && (
@@ -483,11 +449,9 @@ export default function LoginPage() {
                       Forgot password?
                     </button>
                   )}
-
                 </div>
 
                 <div className="input-box">
-
                   <span className="input-icon">
                     <svg viewBox="0 0 24 24">
                       <rect
@@ -530,13 +494,7 @@ export default function LoginPage() {
                         (value) => !value
                       )
                     }
-                    aria-label={
-                      showPassword
-                        ? "Hide password"
-                        : "Show password"
-                    }
                   >
-
                     {showPassword ? (
                       <svg viewBox="0 0 24 24">
                         <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" />
@@ -556,21 +514,17 @@ export default function LoginPage() {
                         <path d="M6.2 6.3C3.5 8.2 2 12 2 12s3.5 6 10 6c1.2 0 2.3-.2 3.2-.5" />
                       </svg>
                     )}
-
                   </button>
-
                 </div>
-
               </label>
 
-              {/* SIGN IN / REGISTER */}
+              {/* SUBMIT */}
 
               <button
                 type="submit"
                 className="primary-button"
                 disabled={loading}
               >
-
                 <span>
                   {loading
                     ? "Please wait..."
@@ -579,33 +533,19 @@ export default function LoginPage() {
                     : "Create Account"}
                 </span>
 
-                {!loading && (
-                  <b>→</b>
-                )}
-
+                {!loading && <b>→</b>}
               </button>
-
             </form>
 
-            {/* =================================
-                DIVIDER
-            ================================= */}
+            {/* DIVIDER */}
 
             <div className="divider">
-
               <span />
-
-              <b>
-                or continue with
-              </b>
-
+              <b>or continue with</b>
               <span />
-
             </div>
 
-            {/* =================================
-                GOOGLE
-            ================================= */}
+            {/* GOOGLE */}
 
             <button
               type="button"
@@ -613,7 +553,6 @@ export default function LoginPage() {
               onClick={googleSignIn}
               disabled={loading}
             >
-
               <span className="google-logo">
                 G
               </span>
@@ -621,15 +560,11 @@ export default function LoginPage() {
               <span>
                 Continue with Google
               </span>
-
             </button>
 
-            {/* =================================
-                SWITCH LOGIN / REGISTER
-            ================================= */}
+            {/* ACCOUNT SWITCH */}
 
             <div className="switch-account">
-
               <span>
                 {mode === "login"
                   ? "New to Aura Camp?"
@@ -650,53 +585,32 @@ export default function LoginPage() {
                   ? "Create account"
                   : "Sign in"}
               </button>
-
             </div>
-
           </section>
 
-          {/* =================================
-              TERMS
-          ================================= */}
+          {/* TERMS */}
 
           <p className="terms">
-
             By continuing, you agree to our{" "}
-
             <a href="/terms">
               Terms of Service
             </a>{" "}
-
             and{" "}
-
             <a href="/privacy">
               Privacy Policy
             </a>
-
             .
-
           </p>
 
-          {/* =================================
-              SECURITY
-          ================================= */}
+          {/* SECURITY */}
 
           <div className="security">
-
-            <span>
-              ✓ Secure Login
-            </span>
-
+            <span>✓ Secure Login</span>
             <b>•</b>
-
-            <span>
-              ⚡ Fast & Easy
-            </span>
-
+            <span>⚡ Fast & Easy</span>
           </div>
 
         </div>
-
       </main>
     </>
   );
@@ -739,9 +653,7 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* =========================================
-   PAGE
-========================================= */
+/* PAGE */
 
 .auth-page {
   min-height: 100svh;
@@ -749,8 +661,7 @@ button {
   display: flex;
   justify-content: center;
 
-  padding:
-    24px 14px 34px;
+  padding: 24px 14px 34px;
 
   background:
     radial-gradient(
@@ -770,21 +681,15 @@ button {
     );
 }
 
-/* =========================================
-   CONTAINER
-========================================= */
-
 .auth-container {
   width: min(470px, 100%);
 }
 
-/* =========================================
-   SINGLE LOGO
-========================================= */
+/* LOGO */
 
 .logo-wrap {
-  width: 82px;
-  height: 82px;
+  width: 105px;
+  height: 105px;
 
   margin:
     0 auto 18px;
@@ -799,7 +704,7 @@ button {
     1px solid
     rgba(215,226,230,.9);
 
-  border-radius: 23px;
+  border-radius: 26px;
 
   background: #ffffff;
 
@@ -812,17 +717,15 @@ button {
 }
 
 .logo {
-  width: 75px;
-  height: 75px;
+  width: 102px;
+  height: 102px;
 
   display: block;
 
   object-fit: contain;
 }
 
-/* =========================================
-   CARD
-========================================= */
+/* CARD */
 
 .auth-card {
   width: 100%;
@@ -850,9 +753,7 @@ button {
     cardEnter .55s ease both;
 }
 
-/* =========================================
-   HEADING
-========================================= */
+/* HEADING */
 
 .heading {
   text-align: center;
@@ -901,9 +802,7 @@ button {
   line-height: 1.55;
 }
 
-/* =========================================
-   MESSAGE
-========================================= */
+/* MESSAGE */
 
 .message {
   display: flex;
@@ -913,8 +812,7 @@ button {
 
   margin-bottom: 16px;
 
-  padding:
-    11px 12px;
+  padding: 11px 12px;
 
   border-radius: 12px;
 
@@ -968,9 +866,7 @@ button {
   background: #ffe2df;
 }
 
-/* =========================================
-   FORM
-========================================= */
+/* FORM */
 
 form {
   display: grid;
@@ -990,9 +886,7 @@ label {
   font-weight: 850;
 }
 
-/* =========================================
-   INPUT
-========================================= */
+/* INPUT */
 
 .input-box {
   height: 56px;
@@ -1071,9 +965,7 @@ label {
   color: #a0adb6;
 }
 
-/* =========================================
-   PASSWORD
-========================================= */
+/* PASSWORD */
 
 .password-heading {
   display: flex;
@@ -1135,9 +1027,7 @@ label {
   stroke-linejoin: round;
 }
 
-/* =========================================
-   PRIMARY BUTTON
-========================================= */
+/* PRIMARY */
 
 .primary-button {
   width: 100%;
@@ -1207,9 +1097,7 @@ label {
   font-size: 17px;
 }
 
-/* =========================================
-   DIVIDER
-========================================= */
+/* DIVIDER */
 
 .divider {
   display: flex;
@@ -1240,9 +1128,7 @@ label {
   white-space: nowrap;
 }
 
-/* =========================================
-   GOOGLE
-========================================= */
+/* GOOGLE */
 
 .google-button {
   width: 100%;
@@ -1316,9 +1202,7 @@ label {
   font-weight: 900;
 }
 
-/* =========================================
-   SWITCH ACCOUNT
-========================================= */
+/* SWITCH */
 
 .switch-account {
   display: flex;
@@ -1352,9 +1236,7 @@ label {
   cursor: pointer;
 }
 
-/* =========================================
-   TERMS
-========================================= */
+/* TERMS */
 
 .terms {
   max-width: 400px;
@@ -1377,9 +1259,7 @@ label {
   font-weight: 750;
 }
 
-/* =========================================
-   SECURITY
-========================================= */
+/* SECURITY */
 
 .security {
   display: flex;
@@ -1403,9 +1283,7 @@ label {
   color: #c1c9ce;
 }
 
-/* =========================================
-   ANIMATIONS
-========================================= */
+/* ANIMATIONS */
 
 @keyframes logoEnter {
   from {
@@ -1473,9 +1351,7 @@ label {
   }
 }
 
-/* =========================================
-   MOBILE
-========================================= */
+/* MOBILE */
 
 @media (max-width: 430px) {
 
@@ -1485,15 +1361,15 @@ label {
   }
 
   .logo-wrap {
-    width: 72px;
-    height: 72px;
+    width: 105px;
+    height: 105px;
 
     margin-bottom: 15px;
   }
 
   .logo {
-    width: 66px;
-    height: 66px;
+    width: 102px;
+    height: 102px;
   }
 
   .auth-card {
@@ -1526,9 +1402,7 @@ label {
   }
 }
 
-/* =========================================
-   SMALL PHONES
-========================================= */
+/* SMALL PHONE */
 
 @media (max-width: 350px) {
 
@@ -1538,19 +1412,17 @@ label {
   }
 
   .logo-wrap {
-    width: 68px;
-    height: 68px;
+    width: 94px;
+    height: 94px;
   }
 
   .logo {
-    width: 62px;
-    height: 62px;
+    width: 92px;
+    height: 92px;
   }
 }
 
-/* =========================================
-   DESKTOP
-========================================= */
+/* DESKTOP */
 
 @media (min-width: 700px) {
 
