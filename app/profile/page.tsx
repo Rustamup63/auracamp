@@ -42,22 +42,6 @@ export default function ProfilePage() {
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [comingSoon, setComingSoon] = useState(false);
 
-  useEffect(() => {
-    load();
-
-    const refresh = () => {
-      if (document.visibilityState === "visible") {
-        load();
-      }
-    };
-
-    document.addEventListener("visibilitychange", refresh);
-
-    return () => {
-      document.removeEventListener("visibilitychange", refresh);
-    };
-  }, []);
-
   async function load() {
     const {
       data: { user },
@@ -68,7 +52,7 @@ export default function ProfilePage() {
       return;
     }
 
-    const [profileResult, withdrawalResult] = await Promise.all([
+    const [p, w] = await Promise.all([
       supabase
         .from("profiles")
         .select(
@@ -85,29 +69,37 @@ export default function ProfilePage() {
         .limit(10),
     ]);
 
-    if (profileResult.error) {
-      console.error(profileResult.error);
-    }
-
-    if (withdrawalResult.error) {
-      console.error(withdrawalResult.error);
-    }
-
-    if (profileResult.data) {
+    if (p.data) {
       setProfile({
-        ...profileResult.data,
-        email: profileResult.data.email || user.email || null,
+        ...p.data,
+        email: p.data.email || user.email || null,
       });
     }
 
-    setWithdrawals(withdrawalResult.data || []);
+    setWithdrawals(w.data || []);
     setLoading(false);
   }
 
   useEffect(() => {
+    load();
+
+    const visibility = () => {
+      if (document.visibilityState === "visible") {
+        load();
+      }
+    };
+
+    document.addEventListener("visibilitychange", visibility);
+
+    return () => {
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, []);
+
+  useEffect(() => {
     let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    async function setupRealtime() {
+    async function realtime() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -115,7 +107,7 @@ export default function ProfilePage() {
       if (!user) return;
 
       channel = supabase
-        .channel("auracamp-profile-" + user.id)
+        .channel(`profile-${user.id}`)
 
         .on(
           "postgres_changes",
@@ -125,19 +117,7 @@ export default function ProfilePage() {
             table: "profiles",
             filter: `id=eq.${user.id}`,
           },
-          async () => {
-            const { data } = await supabase
-              .from("profiles")
-              .select(
-                "user_code,full_name,email,referral_code,wallet_balance,pending_balance,total_earned,total_withdrawn,is_blocked,created_at"
-              )
-              .eq("id", user.id)
-              .maybeSingle();
-
-            if (data) {
-              setProfile(data);
-            }
-          }
+          () => load()
         )
 
         .on(
@@ -148,22 +128,13 @@ export default function ProfilePage() {
             table: "withdrawals",
             filter: `user_id=eq.${user.id}`,
           },
-          async () => {
-            const { data } = await supabase
-              .from("withdrawals")
-              .select("id,amount,method,status,created_at")
-              .eq("user_id", user.id)
-              .order("created_at", { ascending: false })
-              .limit(10);
-
-            setWithdrawals(data || []);
-          }
+          () => load()
         )
 
         .subscribe();
     }
 
-    setupRealtime();
+    realtime();
 
     return () => {
       if (channel) {
@@ -177,7 +148,7 @@ export default function ProfilePage() {
     window.location.replace("/login");
   }
 
-  function showComingSoon() {
+  function coming() {
     setComingSoon(true);
 
     setTimeout(() => {
@@ -191,10 +162,8 @@ export default function ProfilePage() {
         <style>{css}</style>
 
         <main className="loading">
-          <div className="loaderBox">
-            <div className="loader" />
-            <span>Loading profile...</span>
-          </div>
+          <div className="spinner" />
+          <span>Loading profile...</span>
         </main>
       </>
     );
@@ -210,7 +179,7 @@ export default function ProfilePage() {
       .trim()
       .split(/\s+/)
       .slice(0, 2)
-      .map((x) => x.charAt(0).toUpperCase())
+      .map((x) => x[0]?.toUpperCase())
       .join("") || "U";
 
   return (
@@ -221,10 +190,10 @@ export default function ProfilePage() {
 
         {/* HEADER */}
 
-        <header className="top">
+        <header className="header">
 
           <button
-            className="backButton"
+            className="back"
             onClick={() => {
               window.location.href = "/";
             }}
@@ -232,16 +201,14 @@ export default function ProfilePage() {
             ←
           </button>
 
-          <div className="topTitle">
+          <div className="headerText">
             <span>AURA CAMP</span>
-
             <h1>My Profile</h1>
-
             <p>Your account & earnings</p>
           </div>
 
           <button
-            className="logout"
+            className="headerLogout"
             onClick={logout}
           >
             Logout
@@ -250,9 +217,9 @@ export default function ProfilePage() {
         </header>
 
 
-        {/* PROFILE HERO */}
+        {/* PROFILE */}
 
-        <section className="profileHero">
+        <section className="hero">
 
           <div className="avatar">
             {initials}
@@ -260,13 +227,13 @@ export default function ProfilePage() {
 
           <h2>{name}</h2>
 
-          <p>
+          <p className="email">
             {profile?.email || "Email not available"}
           </p>
 
-          <div className="identity">
+          <div className="badges">
 
-            <span className="userCode">
+            <span className="idBadge">
               {profile?.user_code || "AC----"}
             </span>
 
@@ -274,13 +241,13 @@ export default function ProfilePage() {
               className={
                 profile?.is_blocked
                   ? "status blocked"
-                  : "status active"
+                  : "status"
               }
             >
               <i />
               {profile?.is_blocked
                 ? "Blocked"
-                : "Active"}
+                : "Verified"}
             </span>
 
           </div>
@@ -288,11 +255,12 @@ export default function ProfilePage() {
         </section>
 
 
-        {/* ACCOUNT INFORMATION */}
+        {/* ACCOUNT */}
 
         <section className="card">
 
-          <div className="sectionTitle">
+          <div className="heading">
+
             <span>ACCOUNT</span>
 
             <h2>Account Information</h2>
@@ -300,53 +268,44 @@ export default function ProfilePage() {
             <p>
               Your registered account details.
             </p>
+
           </div>
 
-          <InfoRow
+          <Info
             label="Full Name"
-            value={
-              profile?.full_name || "Not set"
-            }
+            value={profile?.full_name || "Not set"}
           />
 
-          <InfoRow
+          <Info
             label="Email"
-            value={
-              profile?.email || "—"
-            }
+            value={profile?.email || "—"}
           />
 
-          <InfoRow
+          <Info
             label="AURA CAMP ID"
-            value={
-              profile?.user_code || "AC----"
-            }
+            value={profile?.user_code || "AC----"}
             green
           />
 
-          <InfoRow
+          <Info
             label="Referral Code"
-            value={
-              profile?.referral_code || "Not set"
-            }
+            value={profile?.referral_code || "Not set"}
           />
 
-          <InfoRow
+          <Info
             label="Joined Date"
-            value={formatDateOnly(
-              profile?.created_at
-            )}
+            value={dateOnly(profile?.created_at)}
           />
 
         </section>
 
 
-        {/* BALANCE */}
+        {/* EARNINGS */}
 
         <section className="stats">
 
           <Stat
-            label="Available Balance"
+            title="Available Balance"
             value={`₹${Number(
               profile?.wallet_balance || 0
             ).toFixed(2)}`}
@@ -354,21 +313,21 @@ export default function ProfilePage() {
           />
 
           <Stat
-            label="Pending Balance"
+            title="Pending Balance"
             value={`₹${Number(
               profile?.pending_balance || 0
             ).toFixed(2)}`}
           />
 
           <Stat
-            label="Total Earned"
+            title="Total Earned"
             value={`₹${Number(
               profile?.total_earned || 0
             ).toFixed(2)}`}
           />
 
           <Stat
-            label="Total Withdrawn"
+            title="Total Withdrawn"
             value={`₹${Number(
               profile?.total_withdrawn || 0
             ).toFixed(2)}`}
@@ -377,26 +336,26 @@ export default function ProfilePage() {
         </section>
 
 
-        {/* WITHDRAWAL HISTORY */}
+        {/* WITHDRAWALS */}
 
-        <section className="card">
+        <section className="card withdrawalCard">
 
-          <div className="titleRow">
+          <div className="withdrawHeader">
 
             <div>
-              <div className="sectionLabel">
+              <span className="headingLabel">
                 PAYMENTS
-              </div>
+              </span>
 
               <h2>Withdrawal History</h2>
 
-              <p className="muted">
+              <p>
                 Your latest payment requests
               </p>
             </div>
 
             <button
-              className="withdrawButton"
+              className="withdraw"
               onClick={() => {
                 window.location.href =
                   "/withdraw";
@@ -420,10 +379,10 @@ export default function ProfilePage() {
                 No withdrawals yet
               </strong>
 
-              <span>
-                Your withdrawal requests
-                will appear here.
-              </span>
+              <small>
+                Your payment requests will
+                appear here.
+              </small>
 
             </div>
 
@@ -434,7 +393,7 @@ export default function ProfilePage() {
               {withdrawals.map((item) => (
 
                 <div
-                  className="historyRow"
+                  className="historyItem"
                   key={item.id}
                 >
 
@@ -447,7 +406,8 @@ export default function ProfilePage() {
                     </strong>
 
                     <small>
-                      {item.method || "Payment"}
+                      {(item.method || "upi")
+                        .toLowerCase()}
                       {" • "}
                       {formatDate(
                         item.created_at
@@ -478,9 +438,9 @@ export default function ProfilePage() {
 
         <section className="actions">
 
-          <button onClick={showComingSoon}>
+          <button onClick={coming}>
 
-            <div className="actionIcon">
+            <div className="actionIcon gift">
               🎁
             </div>
 
@@ -539,7 +499,7 @@ export default function ProfilePage() {
             }}
           >
 
-            <div className="telegramAction">
+            <div className="actionIcon telegramAction">
               <TelegramIcon />
             </div>
 
@@ -556,7 +516,7 @@ export default function ProfilePage() {
         {/* LOGOUT */}
 
         <button
-          className="logoutBig"
+          className="logoutFull"
           onClick={logout}
         >
           Log out of AURA CAMP
@@ -565,7 +525,7 @@ export default function ProfilePage() {
 
         {/* BOTTOM NAV */}
 
-        <nav className="bottom">
+        <nav className="bottomNav">
 
           <button
             onClick={() => {
@@ -597,19 +557,12 @@ export default function ProfilePage() {
               );
             }}
           >
-
             <TelegramIcon />
-
-            <small>
-              Telegram
-            </small>
-
+            <small>Telegram</small>
           </button>
 
 
-          <button
-            onClick={showComingSoon}
-          >
+          <button onClick={coming}>
             <span>▤</span>
             <small>My Offers</small>
           </button>
@@ -634,10 +587,7 @@ export default function ProfilePage() {
             </div>
 
             <div>
-              <strong>
-                Coming Soon
-              </strong>
-
+              <strong>Coming Soon</strong>
               <small>
                 My Offers is under development.
               </small>
@@ -653,9 +603,9 @@ export default function ProfilePage() {
 }
 
 
-/* INFO ROW */
+/* INFO */
 
-function InfoRow({
+function Info({
   label,
   value,
   green = false,
@@ -665,15 +615,11 @@ function InfoRow({
   green?: boolean;
 }) {
   return (
-    <div className="infoRow">
+    <div className="info">
 
       <span>{label}</span>
 
-      <strong
-        className={
-          green ? "green" : ""
-        }
-      >
+      <strong className={green ? "green" : ""}>
         {value}
       </strong>
 
@@ -685,24 +631,18 @@ function InfoRow({
 /* STAT */
 
 function Stat({
-  label,
+  title,
   value,
   dark = false,
 }: {
-  label: string;
+  title: string;
   value: string;
   dark?: boolean;
 }) {
   return (
-    <div
-      className={
-        dark
-          ? "stat dark"
-          : "stat"
-      }
-    >
+    <div className={dark ? "stat dark" : "stat"}>
 
-      <small>{label}</small>
+      <small>{title}</small>
 
       <strong>{value}</strong>
 
@@ -711,15 +651,14 @@ function Stat({
 }
 
 
-/* WITHDRAWAL STATUS */
+/* STATUS */
 
 function Status({
   status,
 }: {
   status: string;
 }) {
-  const s =
-    status.toLowerCase();
+  const s = status.toLowerCase();
 
   if (
     s === "paid" ||
@@ -757,62 +696,51 @@ function Status({
 
 /* DATE */
 
-function formatDateOnly(
-  value?: string | null
-) {
+function dateOnly(value?: string | null) {
   if (!value) return "—";
 
-  const date = new Date(value);
+  const d = new Date(value);
 
-  if (Number.isNaN(date.getTime())) {
+  if (Number.isNaN(d.getTime())) {
     return "—";
   }
 
-  return date.toLocaleDateString(
-    "en-IN",
-    {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    }
-  );
+  return d.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 
 /* DATE + TIME */
 
-function formatDate(
-  value?: string | null
-) {
+function formatDate(value?: string | null) {
   if (!value) return "—";
 
-  const date = new Date(value);
+  const d = new Date(value);
 
-  if (Number.isNaN(date.getTime())) {
+  if (Number.isNaN(d.getTime())) {
     return "—";
   }
 
-  return date.toLocaleString(
-    "en-IN",
-    {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    }
-  );
+  return d.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 
-/* TELEGRAM ICON */
+/* TELEGRAM */
 
 function TelegramIcon() {
   return (
     <svg
       viewBox="0 0 24 24"
       className="telegramIcon"
-      aria-hidden="true"
     >
       <path
         fill="currentColor"
@@ -841,33 +769,15 @@ body{
   background:#eef8fa;
   color:#17202b;
   font-family:
-    Inter,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+    Georgia,
+    "Times New Roman",
+    serif;
 }
 
-.bottom{
-  position:fixed;
-  left:8px;
-  right:8px;
-  bottom:max(8px,env(safe-area-inset-bottom));
-  z-index:99;
-  width:auto;
-  max-width:524px;
-  height:72px;
-  margin:auto;
-  display:grid;
-  grid-template-columns:repeat(5,1fr);
-  align-items:end;
-  padding:4px;
-  border-radius:22px;
-  background:rgba(255,255,255,.97);
-  border:1px solid #e0e9ec;
-  box-shadow:0 15px 40px rgba(15,40,55,.15);
-  backdrop-filter:blur(18px);
+button{
+  font:inherit;
+  cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
 }
 
 .page{
@@ -875,23 +785,24 @@ body{
   max-width:540px;
   min-height:100vh;
   margin:0 auto;
+
   padding:12px 12px
-    calc(155px + env(safe-area-inset-bottom));
+    calc(150px + env(safe-area-inset-bottom));
 
   background:
     radial-gradient(
-      circle at 10% 0%,
-      rgba(34,197,94,.07),
-      transparent 27%
+      circle at 5% 0%,
+      rgba(22,163,74,.07),
+      transparent 28%
     ),
     radial-gradient(
-      circle at 100% 15%,
+      circle at 100% 10%,
       rgba(21,94,239,.07),
       transparent 30%
     ),
     linear-gradient(
       145deg,
-      #f1fbfc,
+      #f0fbfc,
       #f8fcff 55%,
       #faf8ff
     );
@@ -900,189 +811,226 @@ body{
 
 /* HEADER */
 
-.top{
+.header{
   display:flex;
   align-items:center;
   gap:9px;
   margin-bottom:12px;
 }
 
-.backButton{
-  flex:0 0 43px;
-  width:43px;
-  height:43px;
+.back{
+  flex:0 0 44px;
+  width:44px;
+  height:44px;
+
   border:1px solid #dfe8eb;
-  border-radius:14px;
+  border-radius:15px;
+
   background:#fff;
   color:#183342;
+
   font-size:22px;
+
   box-shadow:
-    0 5px 18px rgba(20,60,80,.05);
+    0 5px 18px
+    rgba(20,60,80,.06);
 }
 
-.topTitle{
+.headerText{
   min-width:0;
   flex:1;
 }
 
-.topTitle>span{
+.headerText>span{
   display:block;
+
   color:#159447;
+
   font-size:7px;
-  font-weight:900;
-  letter-spacing:1.5px;
+  font-weight:bold;
+
+  letter-spacing:2px;
 }
 
-.topTitle h1{
+.headerText h1{
   margin:2px 0 1px;
-  font-size:21px;
-  line-height:1.1;
-  letter-spacing:-.4px;
+
+  font-size:23px;
+  line-height:1;
+
+  letter-spacing:-.5px;
 }
 
-.topTitle p{
-  margin:0;
+.headerText p{
+  margin:4px 0 0;
+
   color:#7d8792;
   font-size:9px;
 }
 
-.logout{
+.headerLogout{
   flex:0 0 auto;
+
   border:0;
-  border-radius:10px;
-  padding:9px 11px;
+  border-radius:13px;
+
+  padding:10px 12px;
+
   color:#fff;
-  background:#132f3f;
-  font-size:8px;
-  font-weight:800;
+  background:#163847;
+
+  font-size:9px;
+  font-weight:bold;
+
   box-shadow:
-    0 6px 16px rgba(19,47,63,.16);
+    0 7px 18px
+    rgba(22,56,71,.16);
 }
 
 
 /* HERO */
 
-.profileHero{
+.hero{
   position:relative;
   overflow:hidden;
-  padding:25px 15px 21px;
+
+  padding:28px 15px 23px;
+
   text-align:center;
 
-  border:1px solid #dfeaec;
-  border-radius:24px;
+  border:1px solid #dce9eb;
+  border-radius:25px;
 
   background:
     linear-gradient(
       135deg,
       #fff 0%,
-      #f4fcfc 52%,
-      #f6f1ff 100%
+      #f2fcfc 52%,
+      #f7f1ff 100%
     );
 
   box-shadow:
-    0 12px 32px rgba(20,60,80,.07);
+    0 12px 32px
+    rgba(20,60,80,.07);
 
   margin-bottom:10px;
 }
 
-.profileHero:before{
+.hero:after{
   content:"";
+
   position:absolute;
-  width:130px;
-  height:130px;
-  right:-45px;
-  top:-65px;
+
+  width:150px;
+  height:150px;
+
+  right:-55px;
+  top:-80px;
+
   border-radius:50%;
+
   background:
-    rgba(22,163,74,.08);
+    rgba(22,163,74,.07);
 }
 
 .avatar{
   position:relative;
-  width:72px;
-  height:72px;
+  z-index:1;
+
+  width:76px;
+  height:76px;
+
   margin:auto;
 
   display:flex;
   align-items:center;
   justify-content:center;
 
-  border-radius:22px;
+  border-radius:23px;
 
   color:#fff;
+
   background:
     linear-gradient(
       135deg,
-      #132f3f,
+      #14384a,
       #155eef 58%,
       #16a34a
     );
 
-  font-size:25px;
-  font-weight:900;
+  font-size:28px;
+  font-weight:bold;
 
   box-shadow:
-    0 12px 26px
+    0 12px 28px
     rgba(21,94,239,.22);
 }
 
-.profileHero h2{
-  margin:12px 0 3px;
-  font-size:22px;
-  line-height:1.15;
-  letter-spacing:-.4px;
+.hero h2{
+  margin:13px 0 3px;
+
+  font-size:27px;
+  line-height:1.05;
 }
 
-.profileHero>p{
+.email{
   margin:0;
+
   color:#7c8992;
   font-size:10px;
+
   overflow-wrap:anywhere;
 }
 
-.identity{
+.badges{
   display:flex;
   justify-content:center;
   align-items:center;
-  flex-wrap:wrap;
+
   gap:6px;
-  margin-top:11px;
+
+  flex-wrap:wrap;
+
+  margin-top:12px;
 }
 
-.userCode,
+.idBadge,
 .status{
   display:inline-flex;
   align-items:center;
   gap:5px;
-  padding:6px 10px;
+
+  padding:7px 11px;
+
   border-radius:999px;
+
   font-size:8px;
-  font-weight:850;
+  font-weight:bold;
 }
 
-.userCode{
-  color:#166534;
+.idBadge{
+  color:#16734a;
+
   background:#ecfdf5;
+
   border:1px solid #d1fae5;
 }
 
 .status{
-  color:#64748b;
-  background:#f1f5f9;
-  border:1px solid #e2e8f0;
+  color:#047857;
+
+  background:#ecfdf5;
+
+  border:1px solid #d1fae5;
 }
 
 .status i{
-  width:5px;
-  height:5px;
-  border-radius:50%;
-  background:currentColor;
-}
+  width:6px;
+  height:6px;
 
-.status.active{
-  color:#047857;
-  background:#ecfdf5;
-  border-color:#d1fae5;
+  border-radius:50%;
+
+  background:currentColor;
 }
 
 .status.blocked{
@@ -1095,39 +1043,48 @@ body{
 /* CARD */
 
 .card{
-  padding:16px;
+  padding:17px;
+
   border:1px solid #dfeaec;
-  border-radius:19px;
+  border-radius:20px;
+
   background:#fff;
+
   margin-bottom:10px;
 
   box-shadow:
-    0 6px 22px rgba(20,60,80,.04);
+    0 7px 23px
+    rgba(20,60,80,.045);
 }
 
-.sectionTitle{
+.heading{
   margin-bottom:8px;
 }
 
-.sectionTitle>span,
-.sectionLabel{
+.heading>span,
+.headingLabel{
   display:block;
+
   color:#159447;
+
   font-size:7px;
-  font-weight:900;
-  letter-spacing:1.5px;
+  font-weight:bold;
+
+  letter-spacing:2px;
 }
 
-.sectionTitle h2,
-.card h2{
-  margin:2px 0 0;
-  font-size:15px;
-  letter-spacing:-.1px;
+.heading h2,
+.withdrawHeader h2{
+  margin:3px 0 0;
+
+  font-size:18px;
+  line-height:1.1;
 }
 
-.sectionTitle p,
-.muted{
-  margin:4px 0 12px;
+.heading p,
+.withdrawHeader p{
+  margin:4px 0 11px;
+
   color:#84919a;
   font-size:9px;
 }
@@ -1135,34 +1092,40 @@ body{
 
 /* INFO */
 
-.infoRow{
-  min-height:42px;
+.info{
+  min-height:46px;
+
   display:flex;
   align-items:center;
   justify-content:space-between;
+
   gap:12px;
+
   padding:10px 0;
-  border-bottom:1px solid #eef2f3;
+
+  border-bottom:1px solid #edf2f3;
 }
 
-.infoRow:last-child{
-  border:0;
+.info:last-child{
+  border-bottom:0;
 }
 
-.infoRow span{
+.info span{
   color:#7c8992;
-  font-size:9px;
+  font-size:10px;
 }
 
-.infoRow strong{
-  max-width:66%;
+.info strong{
+  max-width:67%;
+
   text-align:right;
+
   overflow-wrap:anywhere;
-  font-size:9px;
-  line-height:1.35;
+
+  font-size:10px;
 }
 
-.infoRow .green{
+.info .green{
   color:#159447;
 }
 
@@ -1171,82 +1134,104 @@ body{
 
 .stats{
   display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:8px;
+
+  grid-template-columns:
+    1fr 1fr;
+
+  gap:9px;
+
   margin-bottom:10px;
 }
 
 .stat{
   min-width:0;
-  padding:14px;
+
+  padding:16px;
 
   border:1px solid #dfeaec;
-  border-radius:17px;
+  border-radius:18px;
+
   background:#fff;
 
   box-shadow:
-    0 6px 20px rgba(20,60,80,.035);
+    0 6px 20px
+    rgba(20,60,80,.035);
 }
 
 .stat small{
   display:block;
+
   color:#84919a;
-  font-size:8px;
-  line-height:1.25;
+
+  font-size:9px;
 }
 
 .stat strong{
   display:block;
-  margin-top:5px;
-  font-size:17px;
+
+  margin-top:6px;
+
+  font-size:19px;
+
   line-height:1.1;
+
   overflow-wrap:anywhere;
 }
 
 .stat.dark{
   color:#fff;
-  background:#132f3f;
-  border-color:#132f3f;
+
+  background:#163847;
+
+  border-color:#163847;
 }
 
 .stat.dark small{
-  color:#b7c7cf;
+  color:#b9c9d0;
 }
 
 
-/* WITHDRAW */
+/* WITHDRAWAL */
 
-.titleRow{
+.withdrawHeader{
   display:flex;
   align-items:center;
   justify-content:space-between;
-  gap:8px;
+
+  gap:10px;
 }
 
-.withdrawButton{
+.withdraw{
   flex:0 0 auto;
+
   border:0;
-  border-radius:10px;
-  padding:9px 11px;
+  border-radius:12px;
+
+  padding:10px 12px;
 
   color:#fff;
-  background:#132f3f;
+  background:#163847;
 
-  font-size:8px;
-  font-weight:850;
+  font-size:9px;
+  font-weight:bold;
 }
 
 .history{
-  margin-top:5px;
+  margin-top:3px;
 }
 
-.historyRow{
+.historyItem{
+  min-height:62px;
+
   display:flex;
   align-items:center;
   justify-content:space-between;
+
   gap:8px;
+
   padding:12px 0;
-  border-top:1px solid #eef2f3;
+
+  border-top:1px solid #edf2f3;
 }
 
 .historyInfo{
@@ -1255,16 +1240,19 @@ body{
 
 .historyInfo strong{
   display:block;
-  font-size:13px;
-  font-weight:900;
+
+  font-size:15px;
 }
 
 .historyInfo small{
   display:block;
+
   max-width:245px;
+
   margin-top:4px;
 
   color:#98a5ad;
+
   font-size:8px;
 
   overflow:hidden;
@@ -1276,10 +1264,13 @@ body{
 .pending,
 .rejected{
   flex:0 0 auto;
-  padding:6px 9px;
+
+  padding:7px 10px;
+
   border-radius:999px;
+
   font-size:8px;
-  font-weight:850;
+  font-weight:bold;
 }
 
 .paid{
@@ -1302,43 +1293,45 @@ body{
 
 .empty{
   display:flex;
+
   flex-direction:column;
+
   align-items:center;
-  justify-content:center;
-  gap:4px;
 
   text-align:center;
-  padding:24px 8px 8px;
+
+  padding:25px 5px 8px;
 
   color:#84919a;
-  font-size:9px;
-}
-
-.empty strong{
-  color:#52616b;
-  font-size:10px;
-}
-
-.empty span{
-  font-size:8px;
 }
 
 .emptyIcon{
-  width:42px;
-  height:42px;
-  margin-bottom:3px;
+  width:43px;
+  height:43px;
 
   display:flex;
   align-items:center;
   justify-content:center;
+
+  margin-bottom:7px;
 
   border-radius:14px;
 
   color:#159447;
   background:#ecfdf5;
 
-  font-size:17px;
-  font-weight:900;
+  font-size:18px;
+  font-weight:bold;
+}
+
+.empty strong{
+  color:#52616b;
+  font-size:11px;
+}
+
+.empty small{
+  margin-top:3px;
+  font-size:8px;
 }
 
 
@@ -1346,9 +1339,13 @@ body{
 
 .actions{
   display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:8px;
-  margin-bottom:10px;
+
+  grid-template-columns:
+    1fr 1fr;
+
+  gap:9px;
+
+  margin-bottom:11px;
 }
 
 .actions button{
@@ -1356,20 +1353,23 @@ body{
 
   display:flex;
   align-items:center;
+
   gap:9px;
 
-  padding:12px 10px;
+  padding:13px 10px;
 
   border:1px solid #dfeaec;
-  border-radius:15px;
+  border-radius:16px;
 
   background:#fff;
+
   color:#17202b;
 
   text-align:left;
 
   box-shadow:
-    0 5px 18px rgba(20,60,80,.035);
+    0 5px 18px
+    rgba(20,60,80,.035);
 }
 
 .actions button>div:last-child{
@@ -1378,31 +1378,39 @@ body{
 
 .actions strong{
   display:block;
-  font-size:9px;
+
+  font-size:10px;
 }
 
 .actions small{
   display:block;
+
   margin-top:2px;
+
   color:#8b98a1;
-  font-size:7px;
+
+  font-size:8px;
 }
 
-.actionIcon,
-.telegramAction{
-  flex:0 0 32px;
-  width:32px;
-  height:32px;
+.actionIcon{
+  flex:0 0 35px;
+
+  width:35px;
+  height:35px;
 
   display:flex;
   align-items:center;
   justify-content:center;
 
-  border-radius:10px;
+  border-radius:11px;
 
   background:#f2f7f8;
 
-  font-size:15px;
+  font-size:16px;
+}
+
+.gift{
+  background:#f8f0ff;
 }
 
 .telegramAction{
@@ -1411,70 +1419,77 @@ body{
 }
 
 .telegramIcon{
-  width:18px;
-  height:18px;
+  width:19px;
+  height:19px;
 }
 
 
 /* LOGOUT */
 
-.logoutBig{
+.logoutFull{
   width:100%;
-  margin:2px 0 0;
-  padding:12px;
+
+  padding:13px;
 
   border:1px solid #fee2e2;
-  border-radius:14px;
+  border-radius:15px;
 
   background:#fff;
+
   color:#dc2626;
 
   font-size:9px;
-  font-weight:800;
+  font-weight:bold;
 }
 
 
-/* BOTTOM NAV */
+/* BOTTOM */
 
-.bottom{
+.bottomNav{
   position:fixed;
 
   left:8px;
   right:8px;
-  bottom:max(
-    8px,
-    env(safe-area-inset-bottom)
-  );
 
-  z-index:99;
+  bottom:
+    max(
+      8px,
+      env(safe-area-inset-bottom)
+    );
+
+  z-index:100;
 
   width:auto;
   max-width:524px;
+
   height:72px;
-  margin:auto;
+
+  margin:0 auto;
 
   display:grid;
+
   grid-template-columns:
     repeat(5,1fr);
+
   align-items:end;
 
   padding:4px;
 
-  border-radius:22px;
+  border:1px solid #dfe9ec;
+
+  border-radius:23px;
 
   background:
     rgba(255,255,255,.97);
 
-  border:1px solid #e0e9ec;
-
   box-shadow:
     0 15px 40px
-    rgba(15,40,55,.15);
+    rgba(15,40,55,.17);
 
   backdrop-filter:blur(18px);
 }
 
-.bottom button{
+.bottomNav button{
   appearance:none;
   -webkit-appearance:none;
 
@@ -1482,43 +1497,50 @@ body{
   height:62px;
 
   display:flex;
+
   flex-direction:column;
+
   align-items:center;
+
   justify-content:center;
 
-  gap:1px;
+  gap:2px;
 
   border:0;
   outline:0;
+
   background:transparent;
 
   color:#7c8790;
 
-  font-size:20px;
+  font-size:21px;
 }
 
-.bottom button span{
+.bottomNav button span{
   line-height:1;
 }
 
-.bottom small{
+.bottomNav small{
   display:block;
+
   margin-top:3px;
+
   font-size:7px;
-  font-weight:700;
+  font-weight:bold;
 }
 
-.bottom .active{
+.bottomNav .active{
   color:#155eef;
 }
 
-.bottom .telegram{
-  width:58px;
-  height:58px;
+.bottomNav .telegram{
+  width:60px;
+  height:60px;
 
-  margin:-20px auto 0;
+  margin:-21px auto 0;
 
   align-self:start;
+
   justify-self:center;
 
   border-radius:50%;
@@ -1535,17 +1557,17 @@ body{
   border:4px solid #fff;
 
   box-shadow:
-    0 9px 25px
-    rgba(21,94,239,.28);
+    0 10px 27px
+    rgba(21,94,239,.30);
 }
 
-.bottom .telegram small{
+.bottomNav .telegram .telegramIcon{
+  width:24px;
+  height:24px;
+}
+
+.bottomNav .telegram small{
   color:#fff;
-}
-
-.bottom .telegram .telegramIcon{
-  width:23px;
-  height:23px;
 }
 
 
@@ -1553,10 +1575,11 @@ body{
 
 .toast{
   position:fixed;
+
   z-index:200;
 
   left:50%;
-  bottom:92px;
+  bottom:94px;
 
   width:calc(100% - 32px);
   max-width:400px;
@@ -1564,7 +1587,9 @@ body{
   transform:translateX(-50%);
 
   display:flex;
+
   align-items:center;
+
   gap:10px;
 
   padding:12px 14px;
@@ -1572,8 +1597,7 @@ body{
   border:1px solid #dfeaec;
   border-radius:15px;
 
-  background:
-    rgba(255,255,255,.98);
+  background:#fff;
 
   box-shadow:
     0 14px 35px
@@ -1584,8 +1608,8 @@ body{
 }
 
 .toastIcon{
-  width:30px;
-  height:30px;
+  width:31px;
+  height:31px;
 
   display:flex;
   align-items:center;
@@ -1604,8 +1628,11 @@ body{
 
 .toast small{
   display:block;
+
   margin-top:2px;
+
   color:#82909a;
+
   font-size:8px;
 }
 
@@ -1616,27 +1643,25 @@ body{
   min-height:100vh;
 
   display:flex;
+
+  flex-direction:column;
+
   align-items:center;
   justify-content:center;
 
-  background:#f3fafb;
-}
-
-.loaderBox{
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  gap:9px;
+  gap:10px;
 
   color:#71808a;
+
   font-size:10px;
 }
 
-.loader{
-  width:28px;
-  height:28px;
+.spinner{
+  width:29px;
+  height:29px;
 
   border:3px solid #dcecee;
+
   border-top-color:#159447;
 
   border-radius:50%;
@@ -1646,7 +1671,71 @@ body{
 }
 
 
-/* ANIMATION */
+/* SMALL MOBILE */
+
+@media(max-width:380px){
+
+  .page{
+    padding-left:9px;
+    padding-right:9px;
+  }
+
+  .header{
+    gap:6px;
+  }
+
+  .headerLogout{
+    padding:9px 10px;
+  }
+
+  .headerText h1{
+    font-size:21px;
+  }
+
+  .hero{
+    padding-top:24px;
+  }
+
+  .stat{
+    padding:13px;
+  }
+
+  .stat strong{
+    font-size:17px;
+  }
+
+  .info strong{
+    max-width:62%;
+  }
+
+  .actions button{
+    padding:11px 8px;
+  }
+
+}
+
+
+/* DESKTOP APP SHELL */
+
+@media(min-width:801px){
+
+  .page{
+    min-height:100vh;
+
+    border-left:1px solid #e5eef0;
+    border-right:1px solid #e5eef0;
+  }
+
+  .bottomNav{
+    left:50%;
+    right:auto;
+
+    transform:
+      translateX(-50%);
+  }
+
+}
+
 
 @keyframes spin{
   to{
@@ -1665,70 +1754,6 @@ body{
     opacity:1;
     transform:
       translate(-50%,0);
-  }
-}
-
-
-/* SMALL MOBILE */
-
-@media(max-width:380px){
-
-  .page{
-    padding-left:9px;
-    padding-right:9px;
-  }
-
-  .top{
-    gap:6px;
-  }
-
-  .topTitle h1{
-    font-size:19px;
-  }
-
-  .logout{
-    padding:8px 9px;
-  }
-
-  .infoRow strong{
-    max-width:62%;
-  }
-
-  .stat{
-    padding:12px;
-  }
-
-  .stat strong{
-    font-size:15px;
-  }
-
-  .actions button{
-    padding:11px 8px;
-  }
-
-  .actions strong{
-    font-size:8px;
-  }
-}
-
-
-/* DESKTOP = MOBILE APP SHELL */
-
-@media(min-width:801px){
-
-  .page{
-    min-height:100vh;
-
-    border-left:1px solid #e5eef0;
-    border-right:1px solid #e5eef0;
-  }
-
-  .bottom{
-    left:50%;
-    right:auto;
-
-    transform:
-      translateX(-50%);
   }
 }
 `;
