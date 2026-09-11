@@ -2,14 +2,21 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-import type { CSSProperties } from "react";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+  {
+    auth: {
+      flowType: "pkce",
+      persistSession: true,
+      autoRefreshToken: true,
+    },
+  }
 );
 
 type Profile = {
+  user_code: string | null;
   full_name: string | null;
   email: string | null;
   wallet_balance: number;
@@ -38,88 +45,241 @@ type Transaction = {
   created_at: string;
 };
 
+type Withdrawal = {
+  id: string;
+  amount: number;
+  method: string | null;
+  status: string;
+  created_at: string;
+};
+
 export default function Home() {
   const [loading, setLoading] = useState(true);
-  const [userName, setUserName] = useState("User");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
+  const [userName, setUserName] = useState("User");
+  const [message, setMessage] = useState("");
+  const [startingOffer, setStartingOffer] = useState<string | null>(null);
 
   useEffect(() => {
-    loadDashboard();
+    let mounted = true;
+
+    async function init() {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          window.location.replace("/login");
+          return;
+        }
+
+        const { data: admin } = await supabase
+          .from("admin_users")
+          .select("id")
+          .eq("id", user.id)
+          .eq("is_active", true)
+          .maybeSingle();
+
+        if (admin) {
+          window.location.replace("/admin");
+          return;
+        }
+
+        const [profileRes, campaignRes, transactionRes, withdrawalRes] =
+          await Promise.all([
+            supabase
+              .from("profiles")
+              .select(
+                "user_code, full_name, email, wallet_balance, pending_balance, total_earned, total_withdrawn"
+              )
+              .eq("id", user.id)
+              .maybeSingle(),
+
+            supabase
+              .from("campaigns")
+              .select(
+                "id, name, description, category, reward, conversion_type, terms, image_url, landing_url"
+              )
+              .eq("status", "active")
+              .order("created_at", { ascending: false }),
+
+            supabase
+              .from("wallet_transactions")
+              .select("id, type, amount, description, created_at")
+              .eq("user_id", user.id)
+              .order("created_at", { ascending: false })
+              .limit(5),
+
+            supabase
+              .from("withdrawals")
+              .select("id, amount, method, status, created_at")
+              .eq("user_id", user.id)
+              .order("created_at", { ascending: false })
+              .limit(5),
+          ]);
+
+        if (!mounted) return;
+
+        if (profileRes.data) {
+          setProfile(profileRes.data);
+
+          setUserName(
+            profileRes.data.full_name ||
+              user.email?.split("@")[0] ||
+              "User"
+          );
+        } else {
+          setUserName(user.email?.split("@")[0] || "User");
+        }
+
+        setCampaigns(campaignRes.data || []);
+        setTransactions(transactionRes.data || []);
+        setWithdrawals(withdrawalRes.data || []);
+      } catch (error) {
+        console.error("Dashboard error:", error);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+
+    init();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  async function loadDashboard() {
+  /*
+   * REAL-TIME WALLET + WITHDRAWAL UPDATE
+   */
+  useEffect(() => {
+    let userId: string | null = null;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    async function subscribe() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) return;
+
+      userId = user.id;
+
+      channel = supabase
+        .channel(`user-dashboard-${user.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "profiles",
+            filter: `id=eq.${user.id}`,
+          },
+          async () => {
+            const { data } = await supabase
+              .from("profiles")
+              .select(
+                "user_code, full_name, email, wallet_balance, pending_balance, total_earned, total_withdrawn"
+              )
+              .eq("id", user.id)
+              .maybeSingle();
+
+            if (data) {
+              setProfile(data);
+              setUserName(data.full_name || user.email?.split("@")[0] || "User");
+            }
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "withdrawals",
+            filter: `user_id=eq.${user.id}`,
+          },
+          async () => {
+            const { data } = await supabase
+              .from("withdrawals")
+              .select("id, amount, method, status, created_at")
+              .eq("user_id", user.id)
+              .order("created_at", { ascending: false })
+              .limit(5);
+
+            setWithdrawals(data || []);
+          }
+        )
+        .subscribe();
+    }
+
+    subscribe();
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+      userId = null;
+    };
+  }, []);
+
+  async function logout() {
+    await supabase.auth.signOut();
+    window.location.replace("/login");
+  }
+
+  async function startOffer(campaign: Campaign) {
+    if (startingOffer) return;
+
+    setMessage("");
+
     try {
+      setStartingOffer(campaign.id);
+
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
       if (!user) {
-        window.location.href = "/login";
-        return;
-      }
-      alert(`Logged-in User ID: ${user.id}`);
-      const { data: admin } = await supabase
-        .from("admin_users")
-        .select("id, role, is_active")
-        .eq("id", user.id)
-        .eq("is_active", true)
-        .maybeSingle();
-
-      if (admin) {
-        window.location.href = "/admin";
+        window.location.replace("/login");
         return;
       }
 
-      const { data: profileData } = await supabase
-        .from("profiles")
-        .select(
-          "full_name, email, wallet_balance, pending_balance, total_earned, total_withdrawn"
-        )
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (profileData) {
-        setProfile(profileData);
-
-        setUserName(
-          profileData.full_name ||
-            user.email?.split("@")[0] ||
-            "User"
-        );
-      } else {
-        setUserName(user.email?.split("@")[0] || "User");
+      if (!campaign.landing_url) {
+        setMessage("This offer is temporarily unavailable.");
+        return;
       }
 
-      const { data: campaignData } = await supabase
-        .from("campaigns")
-        .select(
-  "id, name, description, category, reward, conversion_type, terms, image_url, landing_url"
-)
-        .eq("status", "active")
-        .order("created_at", { ascending: false });
+      const clickId = crypto.randomUUID();
 
-      setCampaigns(campaignData || []);
+      const { error } = await supabase.from("clicks").insert({
+        user_id: user.id,
+        campaign_id: campaign.id,
+        click_id: clickId,
+        status: "clicked",
+        user_agent: navigator.userAgent,
+      });
 
-      const { data: transactionData } = await supabase
-        .from("wallet_transactions")
-        .select("id, type, amount, description, created_at")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(5);
+      if (error) {
+        console.error("Click tracking error:", error);
+        setMessage("Unable to start this offer. Please try again.");
+        return;
+      }
 
-      setTransactions(transactionData || []);
+      const separator = campaign.landing_url.includes("?") ? "&" : "?";
+
+      const trackingUrl =
+        `${campaign.landing_url}${separator}` +
+        `click_id=${encodeURIComponent(clickId)}`;
+
+      window.location.href = trackingUrl;
     } catch (error) {
-      console.error("Dashboard error:", error);
+      console.error("Start offer error:", error);
+      setMessage("Something went wrong. Please try again.");
     } finally {
-      setLoading(false);
+      setStartingOffer(null);
     }
-  }
-
-  async function logout() {
-    await supabase.auth.signOut();
-    window.location.href = "/login";
   }
 
   if (loading) {
@@ -127,18 +287,15 @@ export default function Home() {
       <>
         <style>{globalStyles}</style>
 
-        <main style={styles.loadingPage}>
-          <div style={styles.loadingBox}>
-            <div style={styles.loadingLogo}>
-              <span>AURA</span>{" "}
-              <b>CAMP</b>
+        <main className="loadingPage">
+          <div className="loadingCard">
+            <div className="loadingLogo">
+              <span>AURA</span> <b>CAMP</b>
             </div>
 
-            <div style={styles.loader} />
+            <div className="loader" />
 
-            <p style={styles.loadingText}>
-              Loading your dashboard...
-            </p>
+            <p>Loading your dashboard...</p>
           </div>
         </main>
       </>
@@ -153,37 +310,31 @@ export default function Home() {
     <>
       <style>{globalStyles}</style>
 
-      <main style={styles.page}>
-        <div style={styles.backgroundGlowOne} />
-        <div style={styles.backgroundGlowTwo} />
+      <main className="page">
+        <div className="glow glowOne" />
+        <div className="glow glowTwo" />
 
-        <div style={styles.container}>
-
+        <div className="container">
           {/* HEADER */}
 
-          <header
-            className="animateDown"
-            style={styles.header}
-          >
-            <div style={styles.brandArea}>
-              <div style={styles.brand}>
-                <span>AURA</span>{" "}
-                <b>CAMP</b>
+          <header className="header animateDown">
+            <div className="brandArea">
+              <div className="brand">
+                <span>AURA</span> <b>CAMP</b>
               </div>
 
-              <div style={styles.tagline}>
+              <div className="tagline">
                 Earn • Explore • Grow
               </div>
             </div>
 
-            <div
-              className="headerRight"
-              style={styles.headerRight}
-            >
+            <div className="headerRight">
               <button
-                className="iconButton notificationButton"
-                style={styles.notificationButton}
+                className="iconButton"
                 aria-label="Notifications"
+                onClick={() => {
+                  window.location.href = "/notifications";
+                }}
               >
                 🔔
               </button>
@@ -191,7 +342,6 @@ export default function Home() {
               <button
                 className="logoutButton"
                 onClick={logout}
-                style={styles.logout}
               >
                 Logout
               </button>
@@ -200,69 +350,76 @@ export default function Home() {
 
           {/* WELCOME */}
 
-          <section
-            className="animateUp delay1 welcome"
-            style={styles.welcome}
-          >
-            <div style={styles.welcomeContent}>
-              <div style={styles.avatar}>
+          <section className="welcomeCard animateUp delay1">
+            <div className="welcomeContent">
+              <div className="avatar">
                 {userName.charAt(0).toUpperCase()}
               </div>
 
-              <div style={styles.welcomeText}>
-                <p style={styles.smallText}>
+              <div className="welcomeText">
+                <p className="smallText">
                   Welcome back 👋
                 </p>
 
-                <h1 style={styles.welcomeTitle}>
-                  {userName}
-                </h1>
+                <h1>{userName}</h1>
 
-                <p style={styles.subText}>
+                <p className="subText">
                   Complete offers and grow your earnings.
                 </p>
               </div>
             </div>
 
-            <div style={styles.welcomeBadge}>
+            <div className="welcomeBadge">
               ✨ Start Earning
             </div>
           </section>
 
-          {/* WALLET + STATS */}
+          {/* AURA CAMP ID */}
 
-          <section
-            className="animateUp delay2 statsGrid"
-            style={styles.statsGrid}
-          >
-            <div
-              className="walletCard"
-              style={styles.walletCard}
-            >
-              <div style={styles.walletTop}>
+          <section className="idCard animateUp delay2">
+            <div className="idIcon">
+              AC
+            </div>
+
+            <div className="idContent">
+              <span>AURA CAMP ID</span>
+
+              <strong>
+                {profile?.user_code || "AC----"}
+              </strong>
+            </div>
+
+            <div className="verified">
+              ✓ Verified
+            </div>
+          </section>
+
+          {/* WALLET */}
+
+          <section className="statsGrid animateUp delay2">
+            <div className="walletCard">
+              <div className="walletTop">
                 <div>
-                  <div style={styles.walletLabel}>
+                  <div className="walletLabel">
                     Available Balance
                   </div>
 
-                  <div style={styles.walletAmount}>
+                  <div className="walletAmount">
                     ₹{wallet.toFixed(2)}
                   </div>
                 </div>
 
-                <div style={styles.walletIcon}>
+                <div className="walletIcon">
                   💳
                 </div>
               </div>
 
-              <div style={styles.walletBottom}>
-                <span style={styles.walletHint}>
+              <div className="walletBottom">
+                <span>
                   Ready to withdraw
                 </span>
 
                 <button
-                  className="walletButton"
-                  style={styles.walletButton}
                   onClick={() => {
                     window.location.href = "/withdraw";
                   }}
@@ -272,282 +429,250 @@ export default function Home() {
               </div>
             </div>
 
-            <div
-              className="statCard"
-              style={styles.statCard}
-            >
-              <div
-                style={{
-                  ...styles.statIcon,
-                  background: "#f3e8ff",
-                  color: "#9333ea",
-                }}
-              >
+            <div className="statCard">
+              <div className="statIcon pendingIcon">
                 ◷
               </div>
 
-              <div style={styles.cardLabel}>
+              <div className="cardLabel">
                 Pending Rewards
               </div>
 
-              <div style={styles.statAmount}>
+              <div className="statAmount">
                 ₹{pending.toFixed(2)}
               </div>
 
-              <div style={styles.cardHint}>
+              <div className="cardHint">
                 Under verification
               </div>
             </div>
 
-            <div
-              className="statCard"
-              style={styles.statCard}
-            >
-              <div
-                style={{
-                  ...styles.statIcon,
-                  background: "#fff7ed",
-                  color: "#f97316",
-                }}
-              >
+            <div className="statCard">
+              <div className="statIcon earnedIcon">
                 🏆
               </div>
 
-              <div style={styles.cardLabel}>
+              <div className="cardLabel">
                 Total Earned
               </div>
 
-              <div style={styles.statAmount}>
+              <div className="statAmount">
                 ₹{earned.toFixed(2)}
               </div>
 
-              <div style={styles.cardHint}>
+              <div className="cardHint">
                 Lifetime earnings
               </div>
             </div>
           </section>
 
+          {/* WITHDRAWAL STATUS */}
+
+          {withdrawals.length > 0 && (
+            <section className="section animateUp delay2">
+              <div className="sectionHeader">
+                <div>
+                  <h2>Latest Withdrawal</h2>
+
+                  <p>
+                    Your withdrawal status updates automatically.
+                  </p>
+                </div>
+              </div>
+
+              <div className="withdrawalCard">
+                <div className="withdrawalLeft">
+                  <div className="withdrawalIcon">
+                    ₹
+                  </div>
+
+                  <div>
+                    <strong>
+                      ₹{Number(withdrawals[0].amount).toFixed(2)}
+                    </strong>
+
+                    <span>
+                      {new Date(
+                        withdrawals[0].created_at
+                      ).toLocaleDateString("en-IN", {
+                        day: "2-digit",
+                        month: "short",
+                        year: "numeric",
+                      })}
+                    </span>
+                  </div>
+                </div>
+
+                <WithdrawalStatus
+                  status={withdrawals[0].status}
+                />
+              </div>
+            </section>
+          )}
+
           {/* QUICK ACTIONS */}
 
-          <section
-            className="animateUp delay3"
-            style={styles.section}
-          >
-            <div style={styles.sectionHeader}>
+          <section className="section animateUp delay3">
+            <div className="sectionHeader">
               <div>
-                <h2 style={styles.sectionTitle}>
-                  Quick Actions
-                </h2>
+                <h2>Quick Actions</h2>
 
-                <p style={styles.sectionSub}>
+                <p>
                   Everything you need in one place.
                 </p>
               </div>
             </div>
 
-            <div
-              className="actionGrid"
-              style={styles.actionGrid}
-            >
-
+            <div className="actionGrid">
               <button
                 className="actionCard"
-                style={styles.actionButton}
-                onClick={() => {
+                onClick={() =>
                   document
                     .getElementById("offers")
                     ?.scrollIntoView({
                       behavior: "smooth",
-                    });
-                }}
+                    })
+                }
               >
-                <div
-                  style={{
-                    ...styles.actionIcon,
-                    background: "#fff1f2",
-                    color: "#e11d48",
-                  }}
-                >
+                <div className="actionIcon red">
                   🎁
                 </div>
 
                 <div className="actionText">
-                  <strong style={styles.actionTitle}>
-                    Earn Rewards
-                  </strong>
-
-                  <span style={styles.actionSub}>
-                    Explore & Earn
-                  </span>
+                  <strong>Earn Rewards</strong>
+                  <span>Explore & Earn</span>
                 </div>
 
-                <span style={styles.actionArrow}>
+                <span className="arrow">
                   →
                 </span>
               </button>
 
               <button
                 className="actionCard"
-                style={styles.actionButton}
                 onClick={() => {
                   window.location.href = "/withdraw";
                 }}
               >
-                <div
-                  style={{
-                    ...styles.actionIcon,
-                    background: "#ecfdf5",
-                    color: "#059669",
-                  }}
-                >
+                <div className="actionIcon green">
                   💸
                 </div>
 
                 <div className="actionText">
-                  <strong style={styles.actionTitle}>
-                    Withdraw
-                  </strong>
-
-                  <span style={styles.actionSub}>
-                    Get Your Money
-                  </span>
+                  <strong>Withdraw</strong>
+                  <span>Get Your Money</span>
                 </div>
 
-                <span style={styles.actionArrow}>
+                <span className="arrow">
                   →
                 </span>
               </button>
 
               <button
                 className="actionCard"
-                style={styles.actionButton}
                 onClick={() => {
-                  alert(
-                    "Referral system will be available soon."
-                  );
+                  window.location.href = "/referrals";
                 }}
               >
-                <div
-                  style={{
-                    ...styles.actionIcon,
-                    background: "#fdf2f8",
-                    color: "#db2777",
-                  }}
-                >
+                <div className="actionIcon pink">
                   👥
                 </div>
 
                 <div className="actionText">
-                  <strong style={styles.actionTitle}>
-                    Refer & Earn
-                  </strong>
-
-                  <span style={styles.actionSub}>
-                    Invite & Earn
-                  </span>
+                  <strong>Refer & Earn</strong>
+                  <span>Invite & Earn</span>
                 </div>
 
-                <span style={styles.actionArrow}>
+                <span className="arrow">
                   →
                 </span>
               </button>
 
               <button
                 className="actionCard"
-                style={styles.actionButton}
                 onClick={() => {
                   window.location.href = "/support";
                 }}
               >
-                <div
-                  style={{
-                    ...styles.actionIcon,
-                    background: "#eff6ff",
-                    color: "#2563eb",
-                  }}
-                >
+                <div className="actionIcon blue">
                   🎧
                 </div>
 
                 <div className="actionText">
-                  <strong style={styles.actionTitle}>
-                    Support
-                  </strong>
-
-                  <span style={styles.actionSub}>
-                    Need Help?
-                  </span>
+                  <strong>Support</strong>
+                  <span>Need Help?</span>
                 </div>
 
-                <span style={styles.actionArrow}>
+                <span className="arrow">
                   →
                 </span>
               </button>
-
             </div>
           </section>
+
+          {/* MESSAGE */}
+
+          {message && (
+            <div className="messageBox">
+              {message}
+            </div>
+          )}
 
           {/* OFFERS */}
 
           <section
             id="offers"
-            className="animateUp delay4"
-            style={styles.section}
+            className="section animateUp delay4"
           >
-            <div style={styles.sectionHeader}>
+            <div className="sectionHeader">
               <div>
-                <h2 style={styles.sectionTitle}>
-                  Available Offers
-                </h2>
+                <h2>Available Offers</h2>
 
-                <p style={styles.sectionSub}>
+                <p>
                   Complete offers and earn real rewards.
                 </p>
               </div>
 
-              <span style={styles.offerCount}>
+              <span className="offerCount">
                 {campaigns.length} Offers
               </span>
             </div>
 
             {campaigns.length === 0 ? (
-              <div style={styles.emptyBox}>
-                <div style={styles.emptyIcon}>
+              <div className="emptyBox">
+                <div className="emptyIcon">
                   🎁
                 </div>
 
-                <h3 style={styles.emptyTitle}>
+                <h3>
                   No offers available
                 </h3>
 
-                <p style={styles.emptyText}>
+                <p>
                   New earning opportunities will appear here.
                 </p>
               </div>
             ) : (
-              <div style={styles.offerGrid}>
+              <div className="offerGrid">
                 {campaigns.map((campaign) => (
-                  <div
+                  <article
                     key={campaign.id}
                     className="offerCard"
-                    style={styles.offerCard}
                   >
-                    <div style={styles.offerImageWrap}>
+                    <div className="offerImage">
                       {campaign.image_url ? (
                         <img
                           src={campaign.image_url}
                           alt={campaign.name}
-                          style={styles.offerImage}
+                          loading="lazy"
                         />
                       ) : (
-                        <div
-                          style={styles.offerPlaceholder}
-                        >
+                        <div className="placeholder">
                           🎁
                         </div>
                       )}
 
-                      <div style={styles.offerRewardBadge}>
+                      <div className="rewardBadge">
                         +₹
                         {Number(
                           campaign.reward
@@ -555,155 +680,104 @@ export default function Home() {
                       </div>
                     </div>
 
-                    <div style={styles.offerContent}>
-                      <div style={styles.offerTop}>
-                        <span style={styles.category}>
+                    <div className="offerContent">
+                      <div className="offerTop">
+                        <span className="category">
                           {campaign.category || "Offer"}
                         </span>
 
-                        <span style={styles.easyBadge}>
+                        <span className="available">
                           ✓ Available
                         </span>
                       </div>
 
-                      <h3 style={styles.offerName}>
+                      <h3>
                         {campaign.name}
                       </h3>
 
-                      <p style={styles.offerDescription}>
+                      <p>
                         {campaign.description ||
                           "Complete this offer and earn your reward."}
                       </p>
 
                       <button
                         className="startButton"
-                        style={styles.startButton}
-                        onClick={async () => {
-  try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      window.location.href = "/login";
-      return;
-    }
-
-    if (!campaign.landing_url) {
-      alert("This offer is temporarily unavailable.");
-      return;
-    }
-
-    const clickId = crypto.randomUUID();
-
-    const { error } = await supabase
-      .from("clicks")
-      .insert({
-        user_id: user.id,
-        campaign_id: campaign.id,
-        click_id: clickId,
-        status: "clicked",
-        user_agent: navigator.userAgent,
-      });
-
-    if (error) {
-  console.error("Click tracking error:", error);
-
-  alert(
-    `Click tracking error: ${error.message}`
-  );
-
-  return;
-    }
-
-    const separator = campaign.landing_url.includes("?")
-      ? "&"
-      : "?";
-
-    const trackingUrl =
-      `${campaign.landing_url}${separator}` +
-      `click_id=${encodeURIComponent(clickId)}`;
-
-    window.location.href = trackingUrl;
-  } catch (error) {
-    console.error("Start offer error:", error);
-    alert("Something went wrong. Please try again.");
-  }
-}}
+                        disabled={
+                          startingOffer === campaign.id
+                        }
+                        onClick={() =>
+                          startOffer(campaign)
+                        }
                       >
-                        Start Offer
-                        <span>→</span>
+                        {startingOffer === campaign.id
+                          ? "Starting..."
+                          : "Start Offer"}
+
+                        <span>
+                          →
+                        </span>
                       </button>
                     </div>
-                  </div>
+                  </article>
                 ))}
               </div>
             )}
           </section>
-                    {/* RECENT ACTIVITY */}
 
-          <section
-            className="animateUp delay5"
-            style={styles.section}
-          >
-            <div style={styles.sectionHeader}>
+          {/* RECENT ACTIVITY */}
+
+          <section className="section animateUp delay5">
+            <div className="sectionHeader">
               <div>
-                <h2 style={styles.sectionTitle}>
-                  Recent Activity
-                </h2>
+                <h2>Recent Activity</h2>
 
-                <p style={styles.sectionSub}>
+                <p>
                   Your latest wallet transactions.
                 </p>
               </div>
 
               {transactions.length > 0 && (
-                <span style={styles.viewAll}>
+                <button
+                  className="viewAll"
+                  onClick={() => {
+                    window.location.href = "/transactions";
+                  }}
+                >
                   View All →
-                </span>
+                </button>
               )}
             </div>
 
             {transactions.length === 0 ? (
-              <div style={styles.emptyBox}>
-                <div style={styles.emptyIcon}>
+              <div className="emptyBox">
+                <div className="emptyIcon">
                   📊
                 </div>
 
-                <h3 style={styles.emptyTitle}>
+                <h3>
                   No transactions yet
                 </h3>
 
-                <p style={styles.emptyText}>
-                  Your earnings will appear here after
-                  completing offers.
+                <p>
+                  Your earnings will appear here after completing offers.
                 </p>
               </div>
             ) : (
-              <div style={styles.transactionBox}>
+              <div className="transactionBox">
                 {transactions.map((transaction) => (
                   <div
-                    key={transaction.id}
                     className="transactionRow"
-                    style={styles.transactionRow}
+                    key={transaction.id}
                   >
-                    <div style={styles.transactionLeft}>
-                      <div style={styles.transactionIcon}>
+                    <div className="transactionLeft">
+                      <div className="transactionIcon">
                         {transaction.amount >= 0
                           ? "↗"
                           : "↘"}
                       </div>
 
-                      <div
-                        style={{
-                          minWidth: 0,
-                          flex: 1,
-                        }}
-                      >
-                        <strong
-                          className="transactionTitle"
-                          style={styles.transactionTitle}
-                        >
+                      <div className="transactionInfo">
+                        <strong>
                           {transaction.description ||
                             transaction.type.replaceAll(
                               "_",
@@ -711,28 +785,27 @@ export default function Home() {
                             )}
                         </strong>
 
-                        <div
-                          style={styles.transactionDate}
-                        >
+                        <span>
                           {new Date(
                             transaction.created_at
-                          ).toLocaleDateString("en-IN", {
-                            day: "2-digit",
-                            month: "short",
-                            year: "numeric",
-                          })}
-                        </div>
+                          ).toLocaleDateString(
+                            "en-IN",
+                            {
+                              day: "2-digit",
+                              month: "short",
+                              year: "numeric",
+                            }
+                          )}
+                        </span>
                       </div>
                     </div>
 
                     <div
-                      style={{
-                        ...styles.transactionAmount,
-                        color:
-                          transaction.amount >= 0
-                            ? "#059669"
-                            : "#ef4444",
-                      }}
+                      className={
+                        transaction.amount >= 0
+                          ? "transactionAmount positive"
+                          : "transactionAmount negative"
+                      }
                     >
                       {transaction.amount >= 0
                         ? "+"
@@ -750,26 +823,117 @@ export default function Home() {
 
           {/* FOOTER */}
 
-          <footer style={styles.footer}>
-            <div style={styles.footerBrand}>
+          <footer className="footer">
+            <div>
               <strong>
-                <span>AURA</span>{" "}
-                <b>CAMP</b>
+                <span>AURA</span> CAMP
               </strong>
 
-              <span>
+              <small>
                 Independent Rewards Platform
-              </span>
+              </small>
             </div>
 
             <span>
               © {new Date().getFullYear()} AURA CAMP
             </span>
           </footer>
-
         </div>
+
+        {/* MOBILE BOTTOM NAV */}
+
+        <nav className="mobileBottomNav">
+          <button
+            className="mobileNavItem active"
+            onClick={() =>
+              window.scrollTo({
+                top: 0,
+                behavior: "smooth",
+              })
+            }
+          >
+            <span>⌂</span>
+            <small>Home</small>
+          </button>
+
+          <button
+            className="mobileNavItem"
+            onClick={() =>
+              document
+                .getElementById("offers")
+                ?.scrollIntoView({
+                  behavior: "smooth",
+                })
+            }
+          >
+            <span>✦</span>
+            <small>Earn</small>
+          </button>
+
+          <button
+            className="mobileNavItem"
+            onClick={() => {
+              window.location.href = "/withdraw";
+            }}
+          >
+            <span>₹</span>
+            <small>Withdraw</small>
+          </button>
+
+          <button
+            className="mobileNavItem"
+            onClick={() => {
+              window.location.href = "/support";
+            }}
+          >
+            <span>◌</span>
+            <small>Support</small>
+          </button>
+        </nav>
       </main>
     </>
+  );
+}
+
+/* =========================================================
+   WITHDRAWAL STATUS
+========================================================= */
+
+function WithdrawalStatus({
+  status,
+}: {
+  status: string;
+}) {
+  const normalized = status.toLowerCase();
+
+  if (
+    normalized === "approved" ||
+    normalized === "paid" ||
+    normalized === "success" ||
+    normalized === "completed"
+  ) {
+    return (
+      <span className="status success">
+        ✓ Paid
+      </span>
+    );
+  }
+
+  if (
+    normalized === "rejected" ||
+    normalized === "failed"
+  ) {
+    return (
+      <span className="status rejected">
+        ✕ Rejected
+      </span>
+    );
+  }
+
+  return (
+    <span className="status pending">
+      ◷ Pending
+    </span>
   );
 }
 
@@ -783,9 +947,10 @@ const globalStyles = `
 }
 
 html {
-  scroll-behavior: smooth;
   width: 100%;
   max-width: 100%;
+  scroll-behavior: smooth;
+  overflow-x: hidden;
 }
 
 body {
@@ -793,44 +958,110 @@ body {
   width: 100%;
   max-width: 100%;
   overflow-x: hidden;
+  background: #f5fbfc;
 }
 
 button {
   font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
 }
 
+button:disabled {
+  opacity: .65;
+  cursor: not-allowed;
+}
+
+.page {
+  min-height: 100vh;
+  width: 100%;
+  max-width: 100%;
+  position: relative;
+  overflow-x: hidden;
+  padding: 14px 12px 45px;
+  background:
+    linear-gradient(
+      145deg,
+      #f3fbfc 0%,
+      #f7fbff 48%,
+      #faf7ff 100%
+    );
+  color: #172033;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+.container {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 2;
+}
+
+.glow {
+  position: fixed;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(75px);
+  z-index: 0;
+}
+
+.glowOne {
+  width: 280px;
+  height: 280px;
+  top: -100px;
+  left: -110px;
+  background: rgba(34, 197, 194, .10);
+}
+
+.glowTwo {
+  width: 320px;
+  height: 320px;
+  right: -130px;
+  bottom: -130px;
+  background: rgba(124, 58, 237, .08);
+}
+
+/* ANIMATION */
+
 .animateUp {
-  animation: auraUp 0.65s ease both;
+  animation: auraUp .55s ease both;
 }
 
 .animateDown {
-  animation: auraDown 0.55s ease both;
+  animation: auraDown .5s ease both;
 }
 
 .delay1 {
-  animation-delay: 0.05s;
+  animation-delay: .04s;
 }
 
 .delay2 {
-  animation-delay: 0.10s;
+  animation-delay: .08s;
 }
 
 .delay3 {
-  animation-delay: 0.15s;
+  animation-delay: .12s;
 }
 
 .delay4 {
-  animation-delay: 0.20s;
+  animation-delay: .16s;
 }
 
 .delay5 {
-  animation-delay: 0.25s;
+  animation-delay: .20s;
 }
 
 @keyframes auraUp {
   from {
     opacity: 0;
-    transform: translateY(18px);
+    transform: translateY(12px);
   }
 
   to {
@@ -842,7 +1073,7 @@ button {
 @keyframes auraDown {
   from {
     opacity: 0;
-    transform: translateY(-12px);
+    transform: translateY(-9px);
   }
 
   to {
@@ -857,70 +1088,979 @@ button {
   }
 }
 
+/* LOADING */
+
+.loadingPage {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background:
+    linear-gradient(
+      145deg,
+      #effbfc,
+      #f5f9ff,
+      #fbf7ff
+    );
+}
+
+.loadingCard {
+  width: min(320px, 100%);
+  padding: 32px 22px;
+  text-align: center;
+  border-radius: 26px;
+  background: rgba(255,255,255,.92);
+  border: 1px solid #e1eaed;
+  box-shadow:
+    0 20px 60px rgba(20,60,80,.10);
+}
+
+.loadingLogo {
+  margin-bottom: 20px;
+  font-size: 25px;
+  font-weight: 900;
+  letter-spacing: -1px;
+}
+
+.loadingLogo span {
+  color: #111827;
+}
+
+.loadingLogo b {
+  color: #16a34a;
+}
+
+.loadingCard p {
+  margin: 14px 0 0;
+  color: #84919d;
+  font-size: 12px;
+}
+
+.loader {
+  width: 29px;
+  height: 29px;
+  margin: auto;
+  border-radius: 50%;
+  border: 3px solid #e4ecef;
+  border-top-color: #16a34a;
+  border-right-color: #155eef;
+  animation: spin .75s linear infinite;
+}
+
+/* HEADER */
+
+.header {
+  min-width: 0;
+  margin-bottom: 12px;
+  padding: 14px 15px;
+  border-radius: 19px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(255,255,255,.88);
+  border: 1px solid rgba(220,230,233,.95);
+  box-shadow:
+    0 8px 28px rgba(20,60,80,.055);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.brandArea {
+  min-width: 0;
+}
+
+.brand {
+  font-size: 22px;
+  font-weight: 950;
+  line-height: 1;
+  letter-spacing: -1px;
+}
+
+.brand span {
+  color: #111827;
+}
+
+.brand b {
+  color: #16a34a;
+}
+
+.tagline {
+  margin-top: 4px;
+  color: #94a3a8;
+  font-size: 9px;
+  letter-spacing: .45px;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.iconButton {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 12px;
+  border: 1px solid #e1e8eb;
+  background: #fff;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.logoutButton {
+  border: 0;
+  border-radius: 11px;
+  padding: 10px 13px;
+  background: #132f3f;
+  color: white;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* WELCOME */
+
+.welcomeCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 11px;
+  padding: 19px;
+  border-radius: 21px;
+  background:
+    linear-gradient(
+      135deg,
+      #ffffff,
+      #f6fbfc 58%,
+      #f5f0ff
+    );
+  border: 1px solid #e1eaed;
+  box-shadow:
+    0 9px 32px rgba(20,60,80,.055);
+}
+
+.welcomeContent {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.avatar {
+  width: 49px;
+  height: 49px;
+  min-width: 49px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 900;
+  background:
+    linear-gradient(
+      135deg,
+      #155eef,
+      #16a34a
+    );
+  box-shadow:
+    0 8px 20px rgba(21,94,239,.18);
+}
+
+.welcomeText {
+  min-width: 0;
+}
+
+.smallText {
+  margin: 0 0 3px;
+  color: #71808a;
+  font-size: 12px;
+}
+
+.welcomeText h1 {
+  margin: 0;
+  color: #111827;
+  font-size: 24px;
+  line-height: 1.15;
+  font-weight: 900;
+  letter-spacing: -.55px;
+  overflow-wrap: anywhere;
+}
+
+.subText {
+  margin: 5px 0 0;
+  color: #71808a;
+  font-size: 11px;
+}
+
+.welcomeBadge {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border-radius: 11px;
+  background: #edf9f5;
+  color: #138a50;
+  font-size: 10px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+/* AURA ID */
+
+.idCard {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 17px;
+  background: rgba(255,255,255,.93);
+  border: 1px solid #e2eaed;
+  box-shadow:
+    0 7px 24px rgba(20,60,80,.045);
+}
+
+.idIcon {
+  width: 39px;
+  height: 39px;
+  min-width: 39px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  color: #fff;
+  background:
+    linear-gradient(
+      135deg,
+      #155eef,
+      #16a34a
+    );
+  font-size: 10px;
+  font-weight: 950;
+}
+
+.idContent {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.idContent span {
+  color: #98a5ad;
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: .7px;
+}
+
+.idContent strong {
+  color: #16202b;
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.verified {
+  flex-shrink: 0;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #059669;
+  font-size: 8px;
+  font-weight: 850;
+}
+
+/* WALLET */
+
+.statsGrid {
+  width: 100%;
+  display: grid;
+  grid-template-columns:
+    minmax(280px, 1.5fr)
+    repeat(2, minmax(190px, 1fr));
+  gap: 11px;
+  margin-bottom: 23px;
+}
+
+.walletCard {
+  min-width: 0;
+  min-height: 150px;
+  padding: 20px;
+  border-radius: 21px;
+  color: #fff;
+  background:
+    linear-gradient(
+      135deg,
+      #123746,
+      #164b59 55%,
+      #166a51
+    );
+  box-shadow:
+    0 14px 34px rgba(18,55,70,.19);
+  overflow: hidden;
+}
+
+.walletTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.walletLabel {
+  margin-bottom: 5px;
+  opacity: .75;
+  font-size: 11px;
+}
+
+.walletAmount {
+  font-size: 30px;
+  font-weight: 950;
+  letter-spacing: -1px;
+}
+
+.walletIcon {
+  width: 46px;
+  height: 46px;
+  min-width: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: rgba(255,255,255,.14);
+  font-size: 21px;
+}
+
+.walletBottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.walletBottom span {
+  opacity: .68;
+  font-size: 10px;
+}
+
+.walletBottom button {
+  border: 0;
+  border-radius: 10px;
+  padding: 9px 12px;
+  color: #123746;
+  background: #fff;
+  font-size: 10px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+/* STAT CARDS */
+
+.statCard {
+  min-width: 0;
+  min-height: 150px;
+  padding: 18px;
+  border-radius: 21px;
+  background: rgba(255,255,255,.92);
+  border: 1px solid #e2eaed;
+  box-shadow:
+    0 7px 24px rgba(20,60,80,.045);
+}
+
+.statIcon {
+  width: 37px;
+  height: 37px;
+  margin-bottom: 11px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.pendingIcon {
+  color: #8b5cf6;
+  background: #f3e8ff;
+}
+
+.earnedIcon {
+  color: #ea580c;
+  background: #fff7ed;
+}
+
+.cardLabel {
+  margin-bottom: 4px;
+  color: #6d7c86;
+  font-size: 10px;
+}
+
+.statAmount {
+  color: #111827;
+  font-size: 23px;
+  font-weight: 900;
+}
+
+.cardHint {
+  margin-top: 5px;
+  color: #98a5ad;
+  font-size: 9px;
+}
+
+/* SECTIONS */
+
+.section {
+  min-width: 0;
+  margin-bottom: 25px;
+}
+
+.sectionHeader {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.sectionHeader h2 {
+  margin: 0;
+  color: #15202b;
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: -.3px;
+}
+
+.sectionHeader p {
+  margin: 4px 0 0;
+  color: #71808a;
+  font-size: 11px;
+}
+
+.offerCount {
+  flex-shrink: 0;
+  padding: 6px 9px;
+  border-radius: 999px;
+  color: #166534;
+  background: #ecfdf5;
+  font-size: 9px;
+  font-weight: 850;
+}
+
+/* WITHDRAWAL */
+
+.withdrawalCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 13px;
+  border-radius: 17px;
+  background: #fff;
+  border: 1px solid #e3ebed;
+  box-shadow: 0 7px 22px rgba(20,60,80,.045);
+}
+
+.withdrawalLeft {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.withdrawalIcon {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  color: #047857;
+  background: #ecfdf5;
+  font-weight: 900;
+}
+
+.withdrawalLeft strong,
+.withdrawalLeft span {
+  display: block;
+}
+
+.withdrawalLeft strong {
+  color: #17202a;
+  font-size: 13px;
+}
+
+.withdrawalLeft span {
+  margin-top: 3px;
+  color: #98a5ad;
+  font-size: 9px;
+}
+
+.status {
+  flex-shrink: 0;
+  padding: 6px 9px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.status.success {
+  color: #047857;
+  background: #ecfdf5;
+}
+
+.status.pending {
+  color: #a16207;
+  background: #fef9c3;
+}
+
+.status.rejected {
+  color: #dc2626;
+  background: #fef2f2;
+}
+
+/* QUICK ACTIONS */
+
+.actionGrid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.actionCard {
+  min-width: 0;
+  min-height: 72px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  border: 1px solid #e3ebed;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(20,60,80,.04);
+  cursor: pointer;
+}
+
+.actionIcon {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  font-size: 16px;
+}
+
+.actionIcon.red {
+  color: #e11d48;
+  background: #fff1f2;
+}
+
+.actionIcon.green {
+  color: #059669;
+  background: #ecfdf5;
+}
+
+.actionIcon.pink {
+  color: #db2777;
+  background: #fdf2f8;
+}
+
+.actionIcon.blue {
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.actionText {
+  min-width: 0;
+  flex: 1;
+}
+
+.actionText strong,
+.actionText span {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.actionText strong {
+  color: #17202a;
+  font-size: 11px;
+}
+
+.actionText span {
+  margin-top: 3px;
+  color: #98a5ad;
+  font-size: 9px;
+}
+
+.arrow {
+  flex-shrink: 0;
+  color: #a0abb1;
+}
+
+/* MESSAGE */
+
+.messageBox {
+  margin-bottom: 18px;
+  padding: 11px 13px;
+  border-radius: 13px;
+  color: #b42318;
+  background: #fff5f4;
+  border: 1px solid #ffd9d5;
+  font-size: 11px;
+}
+
+/* OFFERS */
+
+.offerGrid {
+  width: 100%;
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fit, minmax(270px, 1fr));
+  gap: 12px;
+}
+
+.offerCard {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 18px;
+  background: #fff;
+  border: 1px solid #e3ebed;
+  box-shadow:
+    0 7px 24px rgba(20,60,80,.045);
+}
+
+.offerImage {
+  position: relative;
+  width: 100%;
+  height: 145px;
+  overflow: hidden;
+  background:
+    linear-gradient(
+      135deg,
+      #edf7f8,
+      #f5f1ff
+    );
+}
+
+.offerImage img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+}
+
+.rewardBadge {
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  padding: 6px 9px;
+  border-radius: 9px;
+  color: #047857;
+  background: #fff;
+  box-shadow: 0 5px 14px rgba(0,0,0,.10);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.offerContent {
+  padding: 14px;
+  min-width: 0;
+}
+
+.offerTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.category {
+  max-width: 60%;
+  overflow: hidden;
+  padding: 5px 7px;
+  border-radius: 8px;
+  color: #2563eb;
+  background: #eff6ff;
+  font-size: 9px;
+  font-weight: 800;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.available {
+  color: #059669;
+  font-size: 8px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.offerContent h3 {
+  margin: 9px 0 5px;
+  color: #17202a;
+  font-size: 15px;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.offerContent p {
+  min-height: 34px;
+  margin: 0;
+  color: #71808a;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.startButton {
+  width: 100%;
+  margin-top: 12px;
+  padding: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 11px;
+  color: #fff;
+  background:
+    linear-gradient(
+      90deg,
+      #155eef,
+      #2563eb
+    );
+  font-size: 11px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+/* EMPTY */
+
+.emptyBox {
+  padding: 36px 18px;
+  text-align: center;
+  border-radius: 18px;
+  background: rgba(255,255,255,.9);
+  border: 1px solid #e3ebed;
+}
+
+.emptyIcon {
+  width: 55px;
+  height: 55px;
+  margin: 0 auto 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 17px;
+  background: #eef5ff;
+  font-size: 24px;
+}
+
+.emptyBox h3 {
+  margin: 0 0 5px;
+  color: #17202a;
+  font-size: 15px;
+}
+
+.emptyBox p {
+  margin: 0;
+  color: #84919a;
+  font-size: 10px;
+}
+
+/* TRANSACTIONS */
+
+.transactionBox {
+  overflow: hidden;
+  width: 100%;
+  border-radius: 17px;
+  background: rgba(255,255,255,.94);
+  border: 1px solid #e3ebed;
+}
+
+.transactionRow {
+  min-width: 0;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid #eef2f3;
+}
+
+.transactionRow:last-child {
+  border-bottom: 0;
+}
+
+.transactionLeft {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.transactionIcon {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  color: #059669;
+  background: #ecfdf5;
+  font-weight: 900;
+}
+
+.transactionInfo {
+  min-width: 0;
+}
+
+.transactionInfo strong,
+.transactionInfo span {
+  display: block;
+}
+
+.transactionInfo strong {
+  max-width: 220px;
+  overflow: hidden;
+  color: #17202a;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.transactionInfo span {
+  margin-top: 3px;
+  color: #98a5ad;
+  font-size: 9px;
+}
+
+.transactionAmount {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.positive {
+  color: #059669;
+}
+
+.negative {
+  color: #ef4444;
+}
+
+.viewAll {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  font-size: 10px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+/* FOOTER */
+
+.footer {
+  padding: 20px 3px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #98a5ad;
+  font-size: 9px;
+}
+
+.footer strong {
+  display: block;
+  font-size: 13px;
+}
+
+.footer strong span {
+  color: #111827;
+}
+
+.footer strong {
+  color: #16a34a;
+}
+
+.footer small {
+  display: block;
+  margin-top: 3px;
+  color: #a0abb1;
+  font-size: 8px;
+}
+
+/* MOBILE NAV */
+
+.mobileBottomNav {
+  display: none;
+}
+
+/* HOVER */
+
 .actionCard,
 .offerCard,
 .statCard,
 .walletCard,
 .startButton,
-.walletButton,
+.walletBottom button,
 .iconButton,
 .logoutButton {
   transition:
-    transform 0.2s ease,
-    box-shadow 0.2s ease;
+    transform .18s ease,
+    box-shadow .18s ease;
 }
 
 .actionCard:hover {
-  transform: translateY(-4px);
+  transform: translateY(-3px);
   box-shadow:
-    0 14px 35px rgba(30, 64, 175, 0.10);
+    0 12px 28px rgba(20,60,80,.09);
 }
 
 .offerCard:hover {
-  transform: translateY(-5px);
-  box-shadow:
-    0 18px 40px rgba(30, 64, 175, 0.12);
-}
-
-.statCard:hover {
   transform: translateY(-3px);
   box-shadow:
-    0 14px 35px rgba(30, 64, 175, 0.09);
+    0 14px 32px rgba(20,60,80,.10);
 }
 
 .startButton:hover,
-.walletButton:hover {
-  transform: translateY(-2px);
-  box-shadow:
-    0 10px 25px rgba(37, 99, 235, 0.28);
-}
-
-.iconButton:hover {
-  transform: scale(1.05);
-}
-
+.walletBottom button:hover,
 .logoutButton:hover {
   transform: translateY(-2px);
 }
 
-.actionCard:active,
-.startButton:active,
-.walletButton:active {
-  transform: scale(0.97);
+.iconButton:hover {
+  transform: scale(1.04);
 }
 
 /* TABLET */
 
 @media (max-width: 800px) {
-
-  .container {
-    width: 100% !important;
-    max-width: 100% !important;
-  }
-
   .statsGrid {
-    grid-template-columns:
-      1fr 1fr !important;
+    grid-template-columns: 1fr 1fr;
   }
 
   .walletCard {
@@ -928,966 +2068,256 @@ button {
   }
 
   .actionGrid {
-    grid-template-columns:
-      repeat(2, minmax(0, 1fr)) !important;
+    grid-template-columns: 1fr 1fr;
   }
 
   .offerGrid {
-    grid-template-columns:
-      repeat(2, minmax(0, 1fr)) !important;
+    grid-template-columns: 1fr 1fr;
   }
 }
 
 /* MOBILE */
 
 @media (max-width: 520px) {
-
-  html,
-  body {
-    width: 100%;
-    max-width: 100%;
-    overflow-x: hidden !important;
-  }
-
   .page {
-    width: 100% !important;
-    max-width: 100% !important;
-    padding: 10px 9px 35px !important;
-    overflow-x: hidden !important;
-  }
-
-  .container {
-    width: 100% !important;
-    max-width: 100% !important;
-    min-width: 0 !important;
+    padding:
+      8px
+      8px
+      calc(88px + env(safe-area-inset-bottom));
   }
 
   .header {
-    width: 100% !important;
-    padding: 13px 12px !important;
+    padding: 12px;
+    border-radius: 17px;
   }
 
   .brand {
-    font-size: 20px !important;
+    font-size: 19px;
   }
 
   .tagline {
-    font-size: 9px !important;
+    font-size: 8px;
   }
 
-  .notificationButton {
-    width: 36px !important;
-    height: 36px !important;
-    font-size: 15px !important;
+  .iconButton {
+    width: 35px;
+    height: 35px;
+    font-size: 14px;
   }
 
   .logoutButton {
-    padding: 9px 10px !important;
-    font-size: 11px !important;
+    padding: 9px 10px;
+    font-size: 10px;
   }
 
-  .welcome {
-    width: 100% !important;
-    padding: 17px !important;
-    flex-direction: column !important;
-    align-items: stretch !important;
+  .welcomeCard {
+    padding: 15px;
+    border-radius: 18px;
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .welcomeContent {
-    min-width: 0 !important;
-    width: 100% !important;
-  }
-
-  .welcomeText {
-    min-width: 0 !important;
-    overflow: hidden !important;
+    width: 100%;
   }
 
   .avatar {
-    width: 46px !important;
-    height: 46px !important;
-    min-width: 46px !important;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    border-radius: 14px;
+    font-size: 16px;
   }
 
-  .welcomeTitle {
-    font-size: 21px !important;
-    max-width: 100% !important;
-    overflow-wrap: anywhere !important;
+  .welcomeText h1 {
+    font-size: 21px;
   }
 
   .subText {
-    font-size: 11px !important;
+    font-size: 10px;
   }
 
   .welcomeBadge {
-    align-self: flex-start !important;
+    align-self: flex-start;
+  }
+
+  .idCard {
+    padding: 11px 12px;
+    border-radius: 16px;
+  }
+
+  .idContent strong {
+    font-size: 14px;
   }
 
   .statsGrid {
-    width: 100% !important;
-    grid-template-columns:
-      1fr !important;
-    gap: 10px !important;
+    grid-template-columns: 1fr;
+    gap: 9px;
   }
 
   .walletCard {
-    grid-column: auto !important;
-    width: 100% !important;
-    min-width: 0 !important;
-    padding: 18px !important;
-  }
-
-  .statCard {
-    width: 100% !important;
-    min-width: 0 !important;
+    grid-column: auto;
+    min-height: 145px;
+    padding: 17px;
   }
 
   .walletAmount {
-    font-size: 29px !important;
+    font-size: 28px;
+  }
+
+  .statCard {
+    min-height: 132px;
+    padding: 16px;
   }
 
   .actionGrid {
-    width: 100% !important;
-    grid-template-columns:
-      repeat(2, minmax(0, 1fr)) !important;
-    gap: 9px !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
   }
 
-  .actionButton {
-    width: 100% !important;
-    min-width: 0 !important;
-    min-height: 76px !important;
-    padding: 11px 9px !important;
-    gap: 7px !important;
-    overflow: hidden !important;
+  .actionCard {
+    min-height: 70px;
+    padding: 10px;
+    gap: 7px;
+    border-radius: 14px;
   }
 
   .actionIcon {
-    width: 35px !important;
-    height: 35px !important;
-    min-width: 35px !important;
-    font-size: 15px !important;
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    font-size: 14px;
   }
 
-  .actionText {
-    min-width: 0 !important;
-    overflow: hidden !important;
-    flex: 1 !important;
+  .actionText strong {
+    font-size: 10px;
   }
 
-  .actionTitle,
-  .actionSub {
-    max-width: 100% !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
+  .actionText span {
+    font-size: 8px;
   }
 
-  .actionTitle {
-    font-size: 11px !important;
-  }
-
-  .actionSub {
-    font-size: 9px !important;
-  }
-
-  .actionArrow {
-    display: none !important;
+  .arrow {
+    display: none;
   }
 
   .offerGrid {
-    width: 100% !important;
-    grid-template-columns:
-      1fr !important;
+    grid-template-columns: 1fr;
   }
 
-  .offerCard {
-    width: 100% !important;
-    min-width: 0 !important;
+  .offerImage {
+    height: 155px;
   }
 
-  .offerImageWrap {
-    height: 150px !important;
+  .offerContent h3 {
+    font-size: 14px;
   }
 
-  .offerName {
-    font-size: 15px !important;
-  }
-
-  .transactionBox {
-    width: 100% !important;
-  }
-
-  .transactionRow {
-    width: 100% !important;
-    padding: 12px !important;
-    gap: 7px !important;
-  }
-
-  .transactionTitle {
-    max-width: 145px !important;
+  .transactionInfo strong {
+    max-width: 145px;
   }
 
   .transactionAmount {
-    font-size: 12px !important;
+    font-size: 11px;
   }
 
   .footer {
-    flex-direction: column !important;
-    align-items: flex-start !important;
-    gap: 8px !important;
+    flex-direction: column;
+    align-items: flex-start;
+    padding-bottom: 8px;
+  }
+
+  .mobileBottomNav {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: max(
+      8px,
+      env(safe-area-inset-bottom)
+    );
+    z-index: 100;
+    height: 61px;
+    padding: 4px 5px;
+    display: flex;
+    align-items: center;
+    border: 1px solid rgba(220,230,233,.95);
+    border-radius: 19px;
+    background: rgba(255,255,255,.94);
+    box-shadow:
+      0 13px 35px rgba(15,40,55,.15);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+  }
+
+  .mobileNavItem {
+    flex: 1;
+    min-width: 0;
+    height: 53px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border: 0;
+    background: transparent;
+    color: #7b8992;
+    cursor: pointer;
+  }
+
+  .mobileNavItem span {
+    font-size: 18px;
+    line-height: 19px;
+    font-weight: 900;
+  }
+
+  .mobileNavItem small {
+    font-size: 8px;
+    font-weight: 800;
+  }
+
+  .mobileNavItem.active {
+    color: #155eef;
   }
 }
 
 /* VERY SMALL PHONES */
 
 @media (max-width: 360px) {
-
   .page {
-    padding-left: 7px !important;
-    padding-right: 7px !important;
+    padding-left: 6px;
+    padding-right: 6px;
   }
 
   .brand {
-    font-size: 18px !important;
+    font-size: 18px;
   }
 
   .logoutButton {
-    padding: 8px !important;
-    font-size: 10px !important;
+    padding: 8px;
+    font-size: 9px;
   }
 
-  .notificationButton {
-    width: 33px !important;
-    height: 33px !important;
+  .welcomeText h1 {
+    font-size: 19px;
   }
 
-  .actionButton {
-    padding: 10px 7px !important;
-    gap: 5px !important;
+  .actionCard {
+    padding: 9px 7px;
   }
 
   .actionIcon {
-    width: 32px !important;
-    height: 32px !important;
-    min-width: 32px !important;
-    font-size: 14px !important;
+    width: 31px;
+    height: 31px;
+    min-width: 31px;
   }
 
-  .actionTitle {
-    font-size: 10px !important;
+  .actionText strong {
+    font-size: 9px;
   }
 
-  .actionSub {
-    font-size: 8px !important;
+  .actionText span {
+    font-size: 7px;
   }
 }
 `;
-
-const styles: Record<string, CSSProperties> = {
-  page: {
-    minHeight: "100vh",
-    width: "100%",
-    maxWidth: "100%",
-    boxSizing: "border-box",
-    background:
-      "linear-gradient(145deg, #f8fbff 0%, #f4f7ff 50%, #fbf8ff 100%)",
-    fontFamily:
-      "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    color: "#111827",
-    padding: "16px 14px 45px",
-    position: "relative",
-    overflow: "hidden",
-  },
-
-  backgroundGlowOne: {
-    position: "fixed",
-    width: "280px",
-    height: "280px",
-    borderRadius: "50%",
-    background: "rgba(37, 99, 235, 0.08)",
-    filter: "blur(70px)",
-    top: "-100px",
-    left: "-100px",
-    pointerEvents: "none",
-  },
-
-  backgroundGlowTwo: {
-    position: "fixed",
-    width: "300px",
-    height: "300px",
-    borderRadius: "50%",
-    background: "rgba(168, 85, 247, 0.07)",
-    filter: "blur(75px)",
-    bottom: "-120px",
-    right: "-100px",
-    pointerEvents: "none",
-  },
-
-  container: {
-    maxWidth: "1120px",
-    width: "100%",
-    boxSizing: "border-box",
-    margin: "0 auto",
-    position: "relative",
-    zIndex: 1,
-  },
-
-  loadingPage: {
-    minHeight: "100vh",
-    background:
-      "linear-gradient(145deg, #f8fbff, #f4f7ff, #fbf8ff)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontFamily:
-      "Inter, ui-sans-serif, system-ui, sans-serif",
-  },
-
-  loadingBox: {
-    background: "#fff",
-    padding: "35px",
-    borderRadius: "24px",
-    textAlign: "center",
-    boxShadow:
-      "0 20px 60px rgba(30, 64, 175, 0.12)",
-    minWidth: "260px",
-  },
-
-  loadingLogo: {
-    fontSize: "27px",
-    fontWeight: 900,
-    letterSpacing: "-0.8px",
-    marginBottom: "22px",
-  },
-
-  loader: {
-    width: "30px",
-    height: "30px",
-    border: "3px solid #e5e7eb",
-    borderTop: "3px solid #2563eb",
-    borderRight: "3px solid #9333ea",
-    borderRadius: "50%",
-    margin: "0 auto 15px",
-    animation: "spin 0.8s linear infinite",
-  },
-
-  loadingText: {
-    color: "#6b7280",
-    margin: 0,
-    fontSize: "13px",
-  },
-
-  header: {
-    background: "rgba(255,255,255,0.88)",
-    backdropFilter: "blur(16px)",
-    WebkitBackdropFilter: "blur(16px)",
-    padding: "15px 17px",
-    borderRadius: "20px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: "14px",
-    border: "1px solid rgba(226,232,240,0.9)",
-    boxShadow:
-      "0 8px 30px rgba(30, 64, 175, 0.06)",
-    minWidth: 0,
-  },
-
-  brandArea: {
-    display: "flex",
-    flexDirection: "column",
-    minWidth: 0,
-  },
-
-  brand: {
-    fontSize: "23px",
-    fontWeight: 900,
-    letterSpacing: "-0.8px",
-    lineHeight: 1,
-    background:
-      "linear-gradient(90deg, #155eef 0%, #2563eb 48%, #f97316 100%)",
-    WebkitBackgroundClip: "text",
-    WebkitTextFillColor: "transparent",
-  },
-
-  tagline: {
-    fontSize: "10px",
-    color: "#94a3b8",
-    marginTop: "5px",
-    letterSpacing: "0.3px",
-  },
-
-  headerRight: {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    flexShrink: 0,
-  },
-
-  notificationButton: {
-    width: "39px",
-    height: "39px",
-    borderRadius: "12px",
-    border: "1px solid #e5e7eb",
-    background: "#fff",
-    cursor: "pointer",
-    fontSize: "17px",
-  },
-
-  logout: {
-    background: "#111827",
-    color: "#fff",
-    border: "none",
-    borderRadius: "11px",
-    padding: "10px 14px",
-    fontWeight: 700,
-    cursor: "pointer",
-    fontSize: "12px",
-  },
-
-  welcome: {
-    background:
-      "linear-gradient(135deg, #ffffff 0%, #f8fbff 55%, #f6f1ff 100%)",
-    borderRadius: "22px",
-    padding: "22px",
-    marginBottom: "15px",
-    border: "1px solid #e8edf6",
-    boxShadow:
-      "0 10px 35px rgba(30, 64, 175, 0.06)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "15px",
-    minWidth: 0,
-  },
-
-  welcomeContent: {
-    display: "flex",
-    alignItems: "center",
-    gap: "13px",
-    minWidth: 0,
-    flex: 1,
-  },
-
-  welcomeText: {
-    minWidth: 0,
-  },
-
-  avatar: {
-    width: "50px",
-    height: "50px",
-    minWidth: "50px",
-    borderRadius: "16px",
-    background:
-      "linear-gradient(135deg, #2563eb, #7c3aed)",
-    color: "#fff",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontWeight: 900,
-    fontSize: "19px",
-    boxShadow:
-      "0 8px 20px rgba(37, 99, 235, 0.22)",
-  },
-
-  smallText: {
-    color: "#64748b",
-    margin: "0 0 3px",
-    fontSize: "13px",
-  },
-
-  welcomeTitle: {
-    margin: 0,
-    fontSize: "25px",
-    fontWeight: 850,
-    letterSpacing: "-0.5px",
-    overflowWrap: "anywhere",
-  },
-
-  subText: {
-    color: "#64748b",
-    margin: "5px 0 0",
-    fontSize: "13px",
-  },
-
-  welcomeBadge: {
-    background: "#eff6ff",
-    color: "#2563eb",
-    padding: "9px 12px",
-    borderRadius: "12px",
-    fontSize: "11px",
-    fontWeight: 800,
-    whiteSpace: "nowrap",
-    flexShrink: 0,
-  },
-
-  statsGrid: {
-    display: "grid",
-    gridTemplateColumns:
-      "minmax(280px, 1.5fr) repeat(2, minmax(190px, 1fr))",
-    gap: "13px",
-    marginBottom: "25px",
-    width: "100%",
-  },
-
-  walletCard: {
-    background:
-      "linear-gradient(135deg, #2563eb 0%, #4f46e5 52%, #7c3aed 100%)",
-    color: "#fff",
-    padding: "21px",
-    borderRadius: "21px",
-    minHeight: "155px",
-    boxShadow:
-      "0 15px 35px rgba(37, 99, 235, 0.22)",
-    position: "relative",
-    overflow: "hidden",
-    minWidth: 0,
-  },
-
-  walletTop: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: "10px",
-  },
-
-  walletLabel: {
-    fontSize: "12px",
-    opacity: 0.78,
-    marginBottom: "6px",
-  },
-
-  walletAmount: {
-    fontSize: "31px",
-    fontWeight: 900,
-    letterSpacing: "-1px",
-  },
-
-  walletIcon: {
-    width: "48px",
-    height: "48px",
-    minWidth: "48px",
-    borderRadius: "15px",
-    background:
-      "rgba(255,255,255,0.18)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "22px",
-  },
-
-  walletBottom: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: "18px",
-    gap: "10px",
-  },
-
-  walletHint: {
-    fontSize: "11px",
-    opacity: 0.72,
-  },
-
-  walletButton: {
-    background: "#fff",
-    color: "#2563eb",
-    border: "none",
-    padding: "9px 13px",
-    borderRadius: "11px",
-    fontWeight: 800,
-    fontSize: "11px",
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  },
-
-  statCard: {
-    background:
-      "rgba(255,255,255,0.92)",
-    padding: "19px",
-    borderRadius: "21px",
-    border: "1px solid #e8edf5",
-    boxShadow:
-      "0 8px 25px rgba(30, 64, 175, 0.055)",
-    minHeight: "155px",
-    minWidth: 0,
-  },
-
-  statIcon: {
-    width: "37px",
-    height: "37px",
-    borderRadius: "11px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "17px",
-    marginBottom: "12px",
-  },
-
-  cardLabel: {
-    fontSize: "11px",
-    color: "#64748b",
-    marginBottom: "4px",
-  },
-
-  statAmount: {
-    fontSize: "24px",
-    fontWeight: 850,
-    color: "#111827",
-  },
-
-  cardHint: {
-    fontSize: "10px",
-    color: "#94a3b8",
-    marginTop: "5px",
-  },
-
-  section: {
-    marginBottom: "27px",
-    minWidth: 0,
-  },
-
-  sectionHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: "13px",
-    gap: "10px",
-    minWidth: 0,
-  },
-
-  sectionTitle: {
-    margin: 0,
-    fontSize: "19px",
-    fontWeight: 850,
-    letterSpacing: "-0.35px",
-  },
-
-  sectionSub: {
-    margin: "4px 0 0",
-    color: "#64748b",
-    fontSize: "12px",
-  },
-
-  actionGrid: {
-    display: "grid",
-    gridTemplateColumns:
-      "repeat(4, minmax(0, 1fr))",
-    gap: "11px",
-    width: "100%",
-    minWidth: 0,
-  },
-
-  actionButton: {
-    background: "#fff",
-    border: "1px solid #e8edf5",
-    borderRadius: "17px",
-    padding: "14px",
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    textAlign: "left",
-    cursor: "pointer",
-    boxShadow:
-      "0 7px 22px rgba(30, 64, 175, 0.045)",
-    minHeight: "74px",
-    minWidth: 0,
-    width: "100%",
-    overflow: "hidden",
-  },
-
-  actionIcon: {
-    width: "40px",
-    height: "40px",
-    minWidth: "40px",
-    borderRadius: "12px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "18px",
-  },
-
-  actionTitle: {
-    display: "block",
-    color: "#111827",
-    fontSize: "12px",
-    marginBottom: "3px",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-
-  actionSub: {
-    display: "block",
-    color: "#94a3b8",
-    fontSize: "10px",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-
-  actionArrow: {
-    marginLeft: "auto",
-    color: "#94a3b8",
-    fontSize: "15px",
-    flexShrink: 0,
-  },
-
-  offerCount: {
-    background: "#eef2ff",
-    color: "#4f46e5",
-    padding: "7px 11px",
-    borderRadius: "20px",
-    fontSize: "10px",
-    fontWeight: 800,
-    whiteSpace: "nowrap",
-    flexShrink: 0,
-  },
-
-  viewAll: {
-    color: "#2563eb",
-    fontSize: "11px",
-    fontWeight: 800,
-    whiteSpace: "nowrap",
-  },
-
-  offerGrid: {
-    display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit, minmax(270px, 1fr))",
-    gap: "14px",
-    width: "100%",
-    minWidth: 0,
-  },
-
-  offerCard: {
-    background: "#fff",
-    borderRadius: "19px",
-    overflow: "hidden",
-    border: "1px solid #e8edf5",
-    boxShadow:
-      "0 8px 25px rgba(30, 64, 175, 0.055)",
-    minWidth: 0,
-  },
-
-  offerImageWrap: {
-    height: "145px",
-    position: "relative",
-    background:
-      "linear-gradient(135deg, #eef2ff, #f5f3ff)",
-    overflow: "hidden",
-  },
-
-  offerImage: {
-    width: "100%",
-    height: "100%",
-    objectFit: "cover",
-    display: "block",
-  },
-
-  offerPlaceholder: {
-    width: "100%",
-    height: "100%",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "43px",
-  },
-
-  offerRewardBadge: {
-    position: "absolute",
-    right: "10px",
-    bottom: "10px",
-    background: "#fff",
-    color: "#059669",
-    padding: "7px 10px",
-    borderRadius: "10px",
-    fontSize: "12px",
-    fontWeight: 900,
-    boxShadow:
-      "0 5px 15px rgba(0,0,0,0.12)",
-  },
-
-  offerContent: {
-    padding: "15px",
-    minWidth: 0,
-  },
-
-  offerTop: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "8px",
-  },
-
-  category: {
-    fontSize: "10px",
-    background: "#eff6ff",
-    padding: "5px 8px",
-    borderRadius: "8px",
-    color: "#2563eb",
-    fontWeight: 750,
-    maxWidth: "60%",
-    overflow: "hidden",
-    whiteSpace: "nowrap",
-    textOverflow: "ellipsis",
-  },
-
-  easyBadge: {
-    fontSize: "9px",
-    color: "#059669",
-    fontWeight: 700,
-    whiteSpace: "nowrap",
-  },
-
-  offerName: {
-    margin: "10px 0 6px",
-    fontSize: "16px",
-    fontWeight: 850,
-    color: "#111827",
-    overflowWrap: "anywhere",
-  },
-
-  offerDescription: {
-    color: "#64748b",
-    fontSize: "11px",
-    lineHeight: "1.55",
-    minHeight: "35px",
-    margin: 0,
-  },
-
-  startButton: {
-    width: "100%",
-    marginTop: "13px",
-    border: "none",
-    background:
-      "linear-gradient(90deg, #2563eb, #4f46e5)",
-    color: "#fff",
-    padding: "12px",
-    borderRadius: "11px",
-    fontWeight: 800,
-    cursor: "pointer",
-    fontSize: "12px",
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: "8px",
-  },
-
-  emptyBox: {
-    background:
-      "rgba(255,255,255,0.9)",
-    borderRadius: "20px",
-    padding: "40px 20px",
-    textAlign: "center",
-    color: "#64748b",
-    border: "1px solid #e8edf5",
-  },
-
-  emptyIcon: {
-    width: "58px",
-    height: "58px",
-    borderRadius: "18px",
-    background: "#eef2ff",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    margin: "0 auto 12px",
-    fontSize: "26px",
-  },
-
-  emptyTitle: {
-    color: "#111827",
-    margin: "0 0 5px",
-    fontSize: "16px",
-  },
-
-  emptyText: {
-    margin: 0,
-    fontSize: "12px",
-  },
-
-  transactionBox: {
-    background:
-      "rgba(255,255,255,0.94)",
-    borderRadius: "19px",
-    overflow: "hidden",
-    border: "1px solid #e8edf5",
-    boxShadow:
-      "0 8px 25px rgba(30, 64, 175, 0.045)",
-    width: "100%",
-  },
-
-  transactionRow: {
-    padding: "14px 16px",
-    borderBottom: "1px solid #f1f5f9",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: "15px",
-    minWidth: 0,
-  },
-
-  transactionLeft: {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    minWidth: 0,
-    flex: 1,
-  },
-
-  transactionIcon: {
-    width: "38px",
-    height: "38px",
-    minWidth: "38px",
-    borderRadius: "12px",
-    background: "#ecfdf5",
-    color: "#059669",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontWeight: 900,
-  },
-
-  transactionTitle: {
-    display: "block",
-    fontSize: "12px",
-    color: "#111827",
-    textTransform: "capitalize",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    maxWidth: "220px",
-  },
-
-  transactionDate: {
-    fontSize: "10px",
-    color: "#94a3b8",
-    marginTop: "3px",
-  },
-
-  transactionAmount: {
-    fontWeight: 900,
-    fontSize: "13px",
-    whiteSpace: "nowrap",
-    flexShrink: 0,
-  },
-
-  footer: {
-    padding: "20px 4px 5px",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: "15px",
-    color: "#94a3b8",
-    fontSize: "10px",
-  },
-
-  footerBrand: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "3px",
-  },
-};
-
