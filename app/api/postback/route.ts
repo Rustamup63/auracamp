@@ -37,7 +37,9 @@ async function handlePostback(req: NextRequest) {
     }
 
     const receivedSecret =
-      getParam(req, ["secret", "token", "key"]) || "";
+  req.headers.get("x-auracamp-secret") ||
+  getParam(req, ["secret", "token", "key"]) ||
+  "";
 
     if (receivedSecret !== secret) {
       return NextResponse.json(
