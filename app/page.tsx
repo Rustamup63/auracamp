@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-import type { CSSProperties } from "react";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -48,30 +47,21 @@ type Transaction = {
   created_at: string;
 };
 
-type ComingSoonType =
+type SoonFeature =
   | "My Offers"
   | "Profile"
-  | "Refer & Earn"
-  | "Notifications";
+  | "Notifications"
+  | "Refer & Earn";
 
 export default function Home() {
   const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [userName, setUserName] = useState("User");
-
-  const [profile, setProfile] =
-    useState<Profile | null>(null);
-
-  const [campaigns, setCampaigns] =
-    useState<Campaign[]>([]);
-
-  const [transactions, setTransactions] =
-    useState<Transaction[]>([]);
-
-  const [startingOffer, setStartingOffer] =
-    useState<string | null>(null);
-
+  const [startingOffer, setStartingOffer] = useState<string | null>(null);
   const [comingSoon, setComingSoon] =
-    useState<ComingSoonType | null>(null);
+    useState<SoonFeature | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -89,7 +79,7 @@ export default function Home() {
 
         const { data: admin } = await supabase
           .from("admin_users")
-          .select("id, role, is_active")
+          .select("id")
           .eq("id", user.id)
           .eq("is_active", true)
           .maybeSingle();
@@ -101,13 +91,13 @@ export default function Home() {
 
         const [
           profileResult,
-          campaignResult,
-          transactionResult,
+          campaignsResult,
+          transactionsResult,
         ] = await Promise.all([
           supabase
             .from("profiles")
             .select(
-              "user_code, full_name, email, wallet_balance, pending_balance, total_earned, total_withdrawn"
+              "user_code,full_name,email,wallet_balance,pending_balance,total_earned,total_withdrawn"
             )
             .eq("id", user.id)
             .maybeSingle(),
@@ -115,7 +105,7 @@ export default function Home() {
           supabase
             .from("campaigns")
             .select(
-              "id, name, description, category, reward, conversion_type, terms, image_url, landing_url"
+              "id,name,description,category,reward,conversion_type,terms,image_url,landing_url"
             )
             .eq("status", "active")
             .order("created_at", {
@@ -125,7 +115,7 @@ export default function Home() {
           supabase
             .from("wallet_transactions")
             .select(
-              "id, type, amount, description, created_at"
+              "id,type,amount,description,created_at"
             )
             .eq("user_id", user.id)
             .order("created_at", {
@@ -141,28 +131,19 @@ export default function Home() {
 
           setUserName(
             profileResult.data.full_name ||
-              user.email?.split("@")[0] ||
+              profileResult.data.email?.split("@")[0] ||
               "User"
           );
         } else {
           setUserName(
-            user.email?.split("@")[0] ||
-              "User"
+            user.email?.split("@")[0] || "User"
           );
         }
 
-        setCampaigns(
-          campaignResult.data || []
-        );
-
-        setTransactions(
-          transactionResult.data || []
-        );
+        setCampaigns(campaignsResult.data || []);
+        setTransactions(transactionsResult.data || []);
       } catch (error) {
-        console.error(
-          "Dashboard error:",
-          error
-        );
+        console.error("Dashboard error:", error);
       } finally {
         if (mounted) {
           setLoading(false);
@@ -177,12 +158,14 @@ export default function Home() {
     };
   }, []);
 
+  /* REALTIME PROFILE + WALLET */
+
   useEffect(() => {
     let channel:
       | ReturnType<typeof supabase.channel>
       | null = null;
 
-    async function subscribeRealtime() {
+    async function subscribe() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -190,9 +173,7 @@ export default function Home() {
       if (!user) return;
 
       channel = supabase
-        .channel(
-          `auracamp-dashboard-${user.id}`
-        )
+        .channel(`auracamp-user-${user.id}`)
         .on(
           "postgres_changes",
           {
@@ -202,14 +183,13 @@ export default function Home() {
             filter: `id=eq.${user.id}`,
           },
           async () => {
-            const { data } =
-              await supabase
-                .from("profiles")
-                .select(
-                  "user_code, full_name, email, wallet_balance, pending_balance, total_earned, total_withdrawn"
-                )
-                .eq("id", user.id)
-                .maybeSingle();
+            const { data } = await supabase
+              .from("profiles")
+              .select(
+                "user_code,full_name,email,wallet_balance,pending_balance,total_earned,total_withdrawn"
+              )
+              .eq("id", user.id)
+              .maybeSingle();
 
             if (data) {
               setProfile(data);
@@ -231,17 +211,16 @@ export default function Home() {
             filter: `user_id=eq.${user.id}`,
           },
           async () => {
-            const { data } =
-              await supabase
-                .from("wallet_transactions")
-                .select(
-                  "id, type, amount, description, created_at"
-                )
-                .eq("user_id", user.id)
-                .order("created_at", {
-                  ascending: false,
-                })
-                .limit(5);
+            const { data } = await supabase
+              .from("wallet_transactions")
+              .select(
+                "id,type,amount,description,created_at"
+              )
+              .eq("user_id", user.id)
+              .order("created_at", {
+                ascending: false,
+              })
+              .limit(5);
 
             setTransactions(data || []);
           }
@@ -249,7 +228,7 @@ export default function Home() {
         .subscribe();
     }
 
-    subscribeRealtime();
+    subscribe();
 
     return () => {
       if (channel) {
@@ -263,19 +242,11 @@ export default function Home() {
     window.location.replace("/login");
   }
 
-  function openComingSoon(
-    feature: ComingSoonType
-  ) {
+  function showComingSoon(feature: SoonFeature) {
     setComingSoon(feature);
   }
 
-  function closeComingSoon() {
-    setComingSoon(null);
-  }
-
-  async function startOffer(
-    campaign: Campaign
-  ) {
+  async function startOffer(campaign: Campaign) {
     if (startingOffer) return;
 
     setStartingOffer(campaign.id);
@@ -291,136 +262,97 @@ export default function Home() {
       }
 
       if (!campaign.landing_url) {
-        openComingSoon("My Offers");
+        showComingSoon("My Offers");
         return;
       }
 
-      const clickId =
-        crypto.randomUUID();
+      const clickId = crypto.randomUUID();
 
-      const { error } =
-        await supabase
-          .from("clicks")
-          .insert({
-            user_id: user.id,
-            campaign_id: campaign.id,
-            click_id: clickId,
-            status: "clicked",
-            user_agent:
-              navigator.userAgent,
-          });
+      const { error } = await supabase
+        .from("clicks")
+        .insert({
+          user_id: user.id,
+          campaign_id: campaign.id,
+          click_id: clickId,
+          status: "clicked",
+          user_agent: navigator.userAgent,
+        });
 
       if (error) {
-        console.error(
-          "Click tracking error:",
-          error
-        );
+        console.error("Click tracking error:", error);
         return;
       }
 
-      const separator =
-        campaign.landing_url.includes("?")
-          ? "&"
-          : "?";
+      const separator = campaign.landing_url.includes("?")
+        ? "&"
+        : "?";
 
       const trackingUrl =
         `${campaign.landing_url}` +
-        `${separator}click_id=${encodeURIComponent(
-          clickId
-        )}`;
+        `${separator}click_id=${encodeURIComponent(clickId)}`;
 
-      window.location.href =
-        trackingUrl;
+      window.location.href = trackingUrl;
     } catch (error) {
-      console.error(
-        "Start offer error:",
-        error
-      );
+      console.error("Start offer error:", error);
     } finally {
       setStartingOffer(null);
     }
   }
 
+  const wallet = Number(profile?.wallet_balance || 0);
+  const pending = Number(profile?.pending_balance || 0);
+  const earned = Number(profile?.total_earned || 0);
+
   if (loading) {
     return (
       <>
-        <style>{globalStyles}</style>
+        <style>{css}</style>
 
-        <main style={styles.loadingPage}>
-          <div style={styles.loadingBox}>
-            <div style={styles.loadingLogo}>
-              <span>AURA</span>{" "}
-              <b>CAMP</b>
+        <main className="loadingPage">
+          <div className="loadingBox">
+            <div className="loadingBrand">
+              <span>AURA</span> <b>CAMP</b>
             </div>
 
-            <div style={styles.loader} />
+            <div className="loader" />
 
-            <p style={styles.loadingText}>
-              Loading your dashboard...
-            </p>
+            <p>Loading your dashboard...</p>
           </div>
         </main>
       </>
     );
   }
 
-  const wallet = Number(
-    profile?.wallet_balance || 0
-  );
-
-  const pending = Number(
-    profile?.pending_balance || 0
-  );
-
-  const earned = Number(
-    profile?.total_earned || 0
-  );
-
   return (
     <>
-      <style>{globalStyles}</style>
+      <style>{css}</style>
 
-      <main style={styles.page}>
+      <main className="page">
 
-        <div
-          style={styles.backgroundGlowOne}
-        />
+        <div className="ambient ambientOne" />
+        <div className="ambient ambientTwo" />
 
-        <div
-          style={styles.backgroundGlowTwo}
-        />
-
-        <div style={styles.container}>
+        <div className="container">
 
           {/* HEADER */}
 
-          <header
-            className="animateDown"
-            style={styles.header}
-          >
-            <div style={styles.brandArea}>
-              <div style={styles.brand}>
-                <span>AURA</span>{" "}
-                <b>CAMP</b>
+          <header className="header animateDown">
+            <div>
+              <div className="brand">
+                <span>AURA</span> <b>CAMP</b>
               </div>
 
-              <div style={styles.tagline}>
+              <div className="tagline">
                 Earn • Explore • Grow
               </div>
             </div>
 
-            <div style={styles.headerRight}>
-
+            <div className="headerActions">
               <button
                 type="button"
-                className="topIconButton"
-                style={
-                  styles.notificationButton
-                }
+                className="notificationButton"
                 onClick={() =>
-                  openComingSoon(
-                    "Notifications"
-                  )
+                  showComingSoon("Notifications")
                 }
               >
                 🔔
@@ -430,184 +362,109 @@ export default function Home() {
                 type="button"
                 className="logoutButton"
                 onClick={logout}
-                style={styles.logout}
               >
                 Logout
               </button>
-
             </div>
           </header>
 
           {/* WELCOME */}
 
-          <section
-            className="animateUp delay1"
-            style={styles.welcome}
-          >
-            <div
-              style={
-                styles.welcomeContent
-              }
-            >
+          <section className="welcomeCard animateUp delay1">
+            <div className="welcomeLeft">
 
-              <div style={styles.avatar}>
+              <div className="avatar">
                 {userName
                   .charAt(0)
                   .toUpperCase()}
               </div>
 
-              <div
-                style={styles.welcomeText}
-              >
-                <p style={styles.smallText}>
-                  Welcome back 👋
-                </p>
+              <div className="welcomeText">
+                <p>Welcome back 👋</p>
 
-                <h1
-                  style={
-                    styles.welcomeTitle
-                  }
-                >
-                  {userName}
-                </h1>
+                <h1>{userName}</h1>
 
-                <p style={styles.subText}>
-                  Complete offers and
-                  grow your earnings.
-                </p>
+                <span>
+                  Complete offers and grow
+                  your earnings.
+                </span>
               </div>
 
             </div>
 
             <button
               type="button"
-              className="welcomeButton"
-              style={
-                styles.welcomeBadge
-              }
+              className="startEarning"
               onClick={() =>
                 document
-                  .getElementById(
-                    "offers"
-                  )
+                  .getElementById("offers")
                   ?.scrollIntoView({
                     behavior: "smooth",
+                    block: "start",
                   })
               }
             >
               ✨ Start Earning
             </button>
-
           </section>
 
-          {/* AURA CAMP ID */}
+          {/* USER ID */}
 
-          <section
-            className="animateUp delay2"
-            style={styles.auraIdCard}
-          >
-            <div
-              style={styles.auraIdIcon}
-            >
+          <section className="idCard animateUp delay2">
+
+            <div className="idIcon">
               AC
             </div>
 
-            <div
-              style={
-                styles.auraIdContent
-              }
-            >
-              <span
-                style={
-                  styles.auraIdLabel
-                }
-              >
-                AURA CAMP ID
-              </span>
+            <div className="idInfo">
+              <span>AURA CAMP ID</span>
 
-              <strong
-                style={
-                  styles.auraIdValue
-                }
-              >
-                {profile?.user_code ||
-                  "AC----"}
+              <strong>
+                {profile?.user_code || "AC----"}
               </strong>
             </div>
 
-            <span
-              style={
-                styles.auraIdVerified
-              }
-            >
+            <div className="verified">
               ✓ Verified
-            </span>
+            </div>
+
           </section>
 
-          {/* STATS */}
+          {/* BALANCE + STATS */}
 
-          <section
-            className="animateUp delay2 statsGrid"
-            style={styles.statsGrid}
-          >
+          <section className="statsSection animateUp delay2">
 
-            <div
-              className="walletCard"
-              style={styles.walletCard}
-            >
+            {/* WALLET */}
 
-              <div
-                style={styles.walletTop}
-              >
+            <div className="walletCard">
+
+              <div className="walletTop">
 
                 <div>
-                  <div
-                    style={
-                      styles.walletLabel
-                    }
-                  >
+                  <span className="walletTitle">
                     Available Balance
-                  </div>
+                  </span>
 
-                  <div
-                    style={
-                      styles.walletAmount
-                    }
-                  >
+                  <strong className="walletAmount">
                     ₹{wallet.toFixed(2)}
-                  </div>
+                  </strong>
                 </div>
 
-                <div
-                  style={
-                    styles.walletIcon
-                  }
-                >
+                <div className="walletIcon">
                   💳
                 </div>
 
               </div>
 
-              <div
-                style={
-                  styles.walletBottom
-                }
-              >
+              <div className="walletBottom">
 
-                <span
-                  style={
-                    styles.walletHint
-                  }
-                >
+                <span>
                   Ready to withdraw
                 </span>
 
                 <button
                   type="button"
-                  className="walletButton"
-                  style={
-                    styles.walletButton
-                  }
+                  className="withdrawButton"
                   onClick={() =>
                     (window.location.href =
                       "/withdraw")
@@ -620,326 +477,148 @@ export default function Home() {
 
             </div>
 
-            <div
-              className="statCard"
-              style={styles.statCard}
-            >
-              <div
-                style={{
-                  ...styles.statIcon,
-                  background: "#f3e8ff",
-                  color: "#9333ea",
-                }}
-              >
+            {/* PENDING */}
+
+            <div className="statCard">
+
+              <div className="statIcon pendingIcon">
                 ◷
               </div>
 
-              <div
-                style={
-                  styles.cardLabel
-                }
-              >
+              <span className="statLabel">
                 Pending Rewards
-              </div>
+              </span>
 
-              <div
-                style={
-                  styles.statAmount
-                }
-              >
+              <strong className="statAmount">
                 ₹{pending.toFixed(2)}
-              </div>
+              </strong>
 
-              <div
-                style={
-                  styles.cardHint
-                }
-              >
+              <span className="statHint">
                 Under verification
-              </div>
+              </span>
+
             </div>
 
-            <div
-              className="statCard"
-              style={styles.statCard}
-            >
-              <div
-                style={{
-                  ...styles.statIcon,
-                  background: "#fff7ed",
-                  color: "#f97316",
-                }}
-              >
+            {/* EARNED */}
+
+            <div className="statCard">
+
+              <div className="statIcon earnedIcon">
                 🏆
               </div>
 
-              <div
-                style={
-                  styles.cardLabel
-                }
-              >
+              <span className="statLabel">
                 Total Earned
-              </div>
+              </span>
 
-              <div
-                style={
-                  styles.statAmount
-                }
-              >
+              <strong className="statAmount">
                 ₹{earned.toFixed(2)}
-              </div>
+              </strong>
 
-              <div
-                style={
-                  styles.cardHint
-                }
-              >
+              <span className="statHint">
                 Lifetime earnings
-              </div>
+              </span>
+
             </div>
 
           </section>
 
           {/* QUICK ACTIONS */}
 
-          <section
-            className="animateUp delay3"
-            style={styles.section}
-          >
-            <div
-              style={
-                styles.sectionHeader
-              }
-            >
-              <div>
-                <h2
-                  style={
-                    styles.sectionTitle
-                  }
-                >
-                  Quick Actions
-                </h2>
+          <section className="section animateUp delay3">
 
-                <p
-                  style={
-                    styles.sectionSub
-                  }
-                >
-                  Everything you need
-                  in one place.
+            <div className="sectionHeader">
+              <div>
+                <h2>Quick Actions</h2>
+
+                <p>
+                  Everything you need in one place.
                 </p>
               </div>
             </div>
 
-            <div
-              className="actionGrid"
-              style={styles.actionGrid}
-            >
+            <div className="quickGrid">
 
               <button
                 type="button"
-                className="actionCard"
-                style={
-                  styles.actionButton
-                }
+                className="quickCard"
                 onClick={() =>
                   document
-                    .getElementById(
-                      "offers"
-                    )
+                    .getElementById("offers")
                     ?.scrollIntoView({
                       behavior: "smooth",
                     })
                 }
               >
-                <div
-                  style={{
-                    ...styles.actionIcon,
-                    background:
-                      "#fff1f2",
-                    color:
-                      "#e11d48",
-                  }}
-                >
+                <div className="quickIcon reward">
                   🎁
                 </div>
 
-                <div className="actionText">
-                  <strong
-                    style={
-                      styles.actionTitle
-                    }
-                  >
-                    Earn Rewards
-                  </strong>
-
-                  <span
-                    style={
-                      styles.actionSub
-                    }
-                  >
-                    Explore & Earn
-                  </span>
+                <div>
+                  <strong>Earn Rewards</strong>
+                  <span>Explore & Earn</span>
                 </div>
 
-                <span
-                  style={
-                    styles.actionArrow
-                  }
-                >
-                  →
-                </span>
+                <b>→</b>
               </button>
 
               <button
                 type="button"
-                className="actionCard"
-                style={
-                  styles.actionButton
-                }
+                className="quickCard"
                 onClick={() =>
                   (window.location.href =
                     "/withdraw")
                 }
               >
-                <div
-                  style={{
-                    ...styles.actionIcon,
-                    background:
-                      "#ecfdf5",
-                    color:
-                      "#059669",
-                  }}
-                >
+                <div className="quickIcon money">
                   💸
                 </div>
 
-                <div className="actionText">
-                  <strong
-                    style={
-                      styles.actionTitle
-                    }
-                  >
-                    Withdraw
-                  </strong>
-
-                  <span
-                    style={
-                      styles.actionSub
-                    }
-                  >
-                    Get Your Money
-                  </span>
+                <div>
+                  <strong>Withdraw</strong>
+                  <span>Get Your Money</span>
                 </div>
 
-                <span
-                  style={
-                    styles.actionArrow
-                  }
-                >
-                  →
-                </span>
+                <b>→</b>
               </button>
 
               <button
                 type="button"
-                className="actionCard"
-                style={
-                  styles.actionButton
-                }
+                className="quickCard"
                 onClick={() =>
-                  openComingSoon(
-                    "Refer & Earn"
-                  )
+                  showComingSoon("Refer & Earn")
                 }
               >
-                <div
-                  style={{
-                    ...styles.actionIcon,
-                    background:
-                      "#fdf2f8",
-                    color:
-                      "#db2777",
-                  }}
-                >
+                <div className="quickIcon refer">
                   👥
                 </div>
 
-                <div className="actionText">
-                  <strong
-                    style={
-                      styles.actionTitle
-                    }
-                  >
-                    Refer & Earn
-                  </strong>
-
-                  <span
-                    style={
-                      styles.actionSub
-                    }
-                  >
-                    Coming Soon
-                  </span>
+                <div>
+                  <strong>Refer & Earn</strong>
+                  <span>Coming Soon</span>
                 </div>
 
-                <span
-                  style={
-                    styles.actionArrow
-                  }
-                >
-                  →
-                </span>
+                <b>→</b>
               </button>
 
               <button
                 type="button"
-                className="actionCard"
-                style={
-                  styles.actionButton
-                }
+                className="quickCard"
                 onClick={() =>
                   (window.location.href =
                     "/support")
                 }
               >
-                <div
-                  style={{
-                    ...styles.actionIcon,
-                    background:
-                      "#eff6ff",
-                    color:
-                      "#2563eb",
-                  }}
-                >
+                <div className="quickIcon support">
                   🎧
                 </div>
 
-                <div className="actionText">
-                  <strong
-                    style={
-                      styles.actionTitle
-                    }
-                  >
-                    Support
-                  </strong>
-
-                  <span
-                    style={
-                      styles.actionSub
-                    }
-                  >
-                    Need Help?
-                  </span>
+                <div>
+                  <strong>Support</strong>
+                  <span>Need Help?</span>
                 </div>
 
-                <span
-                  style={
-                    styles.actionArrow
-                  }
-                >
-                  →
-                </span>
+                <b>→</b>
               </button>
 
             </div>
@@ -949,284 +628,156 @@ export default function Home() {
 
           <section
             id="offers"
-            className="animateUp delay4"
-            style={styles.section}
+            className="section animateUp delay4"
           >
 
-            <div
-              style={
-                styles.sectionHeader
-              }
-            >
+            <div className="sectionHeader">
               <div>
-                <h2
-                  style={
-                    styles.sectionTitle
-                  }
-                >
-                  Available Offers
-                </h2>
+                <h2>Available Offers</h2>
 
-                <p
-                  style={
-                    styles.sectionSub
-                  }
-                >
-                  Complete offers and
-                  earn real rewards.
+                <p>
+                  Complete offers and earn real
+                  rewards.
                 </p>
               </div>
 
-              <span
-                style={
-                  styles.offerCount
-                }
-              >
+              <span className="offerCount">
                 {campaigns.length} Offers
               </span>
             </div>
 
             {campaigns.length === 0 ? (
-              <div
-                style={
-                  styles.emptyBox
-                }
-              >
-                <div
-                  style={
-                    styles.emptyIcon
-                  }
-                >
+              <div className="emptyCard">
+
+                <div className="emptyIcon">
                   🎁
                 </div>
 
-                <h3
-                  style={
-                    styles.emptyTitle
-                  }
-                >
+                <h3>
                   No offers available
                 </h3>
 
-                <p
-                  style={
-                    styles.emptyText
-                  }
-                >
-                  New earning
-                  opportunities will
-                  appear here.
+                <p>
+                  New earning opportunities
+                  will appear here.
                 </p>
+
               </div>
             ) : (
-              <div
-                className="offerGrid"
-                style={
-                  styles.offerGrid
-                }
-              >
-                {campaigns.map(
-                  (campaign) => (
-                    <div
-                      key={campaign.id}
-                      className="offerCard"
-                      style={
-                        styles.offerCard
-                      }
-                    >
+              <div className="offersGrid">
 
-                      <div
-                        style={
-                          styles.offerImageWrap
-                        }
-                      >
+                {campaigns.map((campaign) => (
+                  <article
+                    key={campaign.id}
+                    className="offerCard"
+                  >
 
-                        {campaign.image_url ? (
-                          <img
-                            src={
-                              campaign.image_url
-                            }
-                            alt={
-                              campaign.name
-                            }
-                            style={
-                              styles.offerImage
-                            }
-                            loading="lazy"
-                          />
-                        ) : (
-                          <div
-                            style={
-                              styles.offerPlaceholder
-                            }
-                          >
-                            🎁
-                          </div>
-                        )}
+                    <div className="offerImageBox">
 
-                        <div
-                          style={
-                            styles.offerRewardBadge
-                          }
-                        >
-                          +₹
-                          {Number(
-                            campaign.reward
-                          ).toFixed(2)}
+                      {campaign.image_url ? (
+                        <img
+                          src={campaign.image_url}
+                          alt={campaign.name}
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="offerPlaceholder">
+                          🎁
                         </div>
+                      )}
 
-                      </div>
+                      <span className="rewardBadge">
+                        +₹
+                        {Number(
+                          campaign.reward
+                        ).toFixed(2)}
+                      </span>
 
-                      <div
-                        style={
-                          styles.offerContent
-                        }
-                      >
-
-                        <div
-                          style={
-                            styles.offerTop
-                          }
-                        >
-                          <span
-                            style={
-                              styles.category
-                            }
-                          >
-                            {campaign.category ||
-                              "Offer"}
-                          </span>
-
-                          <span
-                            style={
-                              styles.easyBadge
-                            }
-                          >
-                            ✓ Available
-                          </span>
-                        </div>
-
-                        <h3
-                          style={
-                            styles.offerName
-                          }
-                        >
-                          {campaign.name}
-                        </h3>
-
-                        <p
-                          style={
-                            styles.offerDescription
-                          }
-                        >
-                          {campaign.description ||
-                            "Complete this offer and earn your reward."}
-                        </p>
-
-                        <button
-                          type="button"
-                          className="startButton"
-                          style={
-                            styles.startButton
-                          }
-                          disabled={
-                            startingOffer ===
-                            campaign.id
-                          }
-                          onClick={() =>
-                            startOffer(
-                              campaign
-                            )
-                          }
-                        >
-                          {startingOffer ===
-                          campaign.id
-                            ? "Starting..."
-                            : "Start Offer"}
-
-                          <span>
-                            →
-                          </span>
-                        </button>
-
-                      </div>
                     </div>
-                  )
-                )}
+
+                    <div className="offerBody">
+
+                      <div className="offerMeta">
+                        <span className="category">
+                          {campaign.category ||
+                            "Offer"}
+                        </span>
+
+                        <span className="available">
+                          ✓ Available
+                        </span>
+                      </div>
+
+                      <h3>
+                        {campaign.name}
+                      </h3>
+
+                      <p>
+                        {campaign.description ||
+                          "Complete this offer and earn your reward."}
+                      </p>
+
+                      <button
+                        type="button"
+                        className="offerButton"
+                        disabled={
+                          startingOffer ===
+                          campaign.id
+                        }
+                        onClick={() =>
+                          startOffer(campaign)
+                        }
+                      >
+                        {startingOffer ===
+                        campaign.id
+                          ? "Starting..."
+                          : "Start Offer"}
+
+                        <span>→</span>
+                      </button>
+
+                    </div>
+                  </article>
+                ))}
+
               </div>
             )}
           </section>
 
           {/* RECENT ACTIVITY */}
 
-          <section
-            className="animateUp delay5"
-            style={styles.section}
-          >
+          <section className="section animateUp delay5">
 
-            <div
-              style={
-                styles.sectionHeader
-              }
-            >
+            <div className="sectionHeader">
               <div>
-                <h2
-                  style={
-                    styles.sectionTitle
-                  }
-                >
-                  Recent Activity
-                </h2>
+                <h2>Recent Activity</h2>
 
-                <p
-                  style={
-                    styles.sectionSub
-                  }
-                >
-                  Your latest wallet
-                  transactions.
+                <p>
+                  Your latest wallet transactions.
                 </p>
               </div>
             </div>
 
             {transactions.length === 0 ? (
-              <div
-                style={
-                  styles.emptyBox
-                }
-              >
-                <div
-                  style={
-                    styles.emptyIcon
-                  }
-                >
+              <div className="emptyCard">
+
+                <div className="emptyIcon">
                   📊
                 </div>
 
-                <h3
-                  style={
-                    styles.emptyTitle
-                  }
-                >
+                <h3>
                   No transactions yet
                 </h3>
 
-                <p
-                  style={
-                    styles.emptyText
-                  }
-                >
-                  Your earnings will
-                  appear here after
-                  completing offers.
+                <p>
+                  Your earnings will appear here
+                  after completing offers.
                 </p>
+
               </div>
             ) : (
-              <div
-                style={
-                  styles.transactionBox
-                }
-              >
+              <div className="transactions">
+
                 {transactions.map(
                   (transaction) => {
                     const positive =
@@ -1236,49 +787,27 @@ export default function Home() {
 
                     return (
                       <div
-                        key={
-                          transaction.id
-                        }
-                        style={
-                          styles.transactionRow
-                        }
+                        key={transaction.id}
+                        className="transaction"
                       >
 
-                        <div
-                          style={
-                            styles.transactionLeft
-                          }
-                        >
+                        <div className="transactionLeft">
 
                           <div
-                            style={{
-                              ...styles.transactionIcon,
-                              background:
-                                positive
-                                  ? "#ecfdf5"
-                                  : "#fff1f2",
-                              color:
-                                positive
-                                  ? "#059669"
-                                  : "#ef4444",
-                            }}
+                            className={
+                              positive
+                                ? "transactionIcon green"
+                                : "transactionIcon red"
+                            }
                           >
                             {positive
                               ? "↗"
                               : "↘"}
                           </div>
 
-                          <div
-                            style={{
-                              minWidth: 0,
-                              flex: 1,
-                            }}
-                          >
-                            <strong
-                              style={
-                                styles.transactionTitle
-                              }
-                            >
+                          <div className="transactionInfo">
+
+                            <strong>
                               {transaction.description ||
                                 transaction.type.replaceAll(
                                   "_",
@@ -1286,209 +815,172 @@ export default function Home() {
                                 )}
                             </strong>
 
-                            <div
-                              style={
-                                styles.transactionDate
-                              }
-                            >
+                            <span>
                               {new Date(
                                 transaction.created_at
                               ).toLocaleDateString(
                                 "en-IN",
                                 {
                                   day: "2-digit",
-                                  month:
-                                    "short",
-                                  year:
-                                    "numeric",
+                                  month: "short",
+                                  year: "numeric",
                                 }
                               )}
-                            </div>
+                            </span>
+
                           </div>
 
                         </div>
 
-                        <div
-                          style={{
-                            ...styles.transactionAmount,
-                            color:
-                              positive
-                                ? "#059669"
-                                : "#ef4444",
-                          }}
+                        <strong
+                          className={
+                            positive
+                              ? "transactionAmount greenText"
+                              : "transactionAmount redText"
+                          }
                         >
-                          {positive
-                            ? "+"
-                            : "-"}
-                          ₹
+                          {positive ? "+" : "-"}₹
                           {Math.abs(
                             Number(
                               transaction.amount
                             )
                           ).toFixed(2)}
-                        </div>
+                        </strong>
 
                       </div>
                     );
                   }
                 )}
+
               </div>
             )}
 
           </section>
 
-          <footer
-            style={styles.footer}
-          >
-            <div
-              style={
-                styles.footerBrand
-              }
-            >
+          {/* FOOTER */}
+
+          <footer className="footer">
+            <div>
               <strong>
-                <span>AURA</span>{" "}
-                <b>CAMP</b>
+                <span>AURA</span> <b>CAMP</b>
               </strong>
 
-              <span>
-                Independent Rewards
-                Platform
-              </span>
+              <small>
+                Independent Rewards Platform
+              </small>
             </div>
 
             <span>
-              ©{" "}
-              {new Date().getFullYear()}{" "}
-              AURA CAMP
+              © {new Date().getFullYear()} AURA CAMP
             </span>
           </footer>
 
         </div>
 
-        {/* =================================================
-            FIXED BOTTOM NAV
-        ================================================= */}
+        {/* ==================================================
+            BOTTOM NAVIGATION
+        ================================================== */}
 
-        <nav
-          className="auraBottomNav"
-          aria-label="Aura Camp navigation"
-        >
+        <nav className="bottomNav">
 
           {/* HOME */}
 
           <button
             type="button"
-            className="auraNavItem auraNavActive"
-            onClick={() => {
+            className="navButton active"
+            onClick={() =>
               window.scrollTo({
                 top: 0,
                 behavior: "smooth",
-              });
-            }}
+              })
+            }
           >
-            <span className="auraNavIcon">
-              <svg
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path
-                  d="M3 10.8 12 3l9 7.8v9.2a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </span>
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M3 10.8 12 3l9 7.8v9.2a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinejoin="round"
+              />
+            </svg>
 
-            <span className="auraNavLabel">
-              Home
-            </span>
+            <span>Home</span>
           </button>
 
           {/* OFFERS */}
 
           <button
             type="button"
-            className="auraNavItem"
-            onClick={() => {
+            className="navButton"
+            onClick={() =>
               document
                 .getElementById("offers")
                 ?.scrollIntoView({
                   behavior: "smooth",
                   block: "start",
-                });
-            }}
+                })
+            }
           >
-            <span className="auraNavIcon">
-              <svg
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <rect
-                  x="4"
-                  y="4"
-                  width="6"
-                  height="6"
-                  rx="1"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                />
-                <rect
-                  x="14"
-                  y="4"
-                  width="6"
-                  height="6"
-                  rx="1"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                />
-                <rect
-                  x="4"
-                  y="14"
-                  width="6"
-                  height="6"
-                  rx="1"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                />
-                <rect
-                  x="14"
-                  y="14"
-                  width="6"
-                  height="6"
-                  rx="1"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                />
-              </svg>
-            </span>
+            <svg viewBox="0 0 24 24">
+              <rect
+                x="4"
+                y="4"
+                width="6"
+                height="6"
+                rx="1"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
+              <rect
+                x="14"
+                y="4"
+                width="6"
+                height="6"
+                rx="1"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
+              <rect
+                x="4"
+                y="14"
+                width="6"
+                height="6"
+                rx="1"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
+              <rect
+                x="14"
+                y="14"
+                width="6"
+                height="6"
+                rx="1"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
+            </svg>
 
-            <span className="auraNavLabel">
-              Offers
-            </span>
+            <span>Offers</span>
           </button>
 
           {/* TELEGRAM */}
 
           <button
             type="button"
-            className="auraTelegramNav"
+            className="telegramButton"
             onClick={() => {
               window.location.href =
                 TELEGRAM_URL;
             }}
             aria-label="Open Aura Camp Telegram"
           >
-            <span className="auraTelegramCircle">
-              <svg
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
+            <span className="telegramCircle">
+              <svg viewBox="0 0 24 24">
                 <path
                   d="M21.7 3.4 18.5 20c-.24 1.17-.87 1.46-1.76.91l-4.84-3.57-2.34 2.25c-.26.26-.48.48-.98.48l.35-4.93 8.97-8.1c.39-.35-.08-.55-.6-.2L6.2 13.92l-4.73-1.48c-1.03-.32-1.05-1.03.22-1.52L20.17 3.1c.87-.32 1.63.2 1.53.3Z"
                   fill="white"
@@ -1496,153 +988,123 @@ export default function Home() {
               </svg>
             </span>
 
-            <span className="telegramText">
-              Telegram
-            </span>
+            <span>Telegram</span>
           </button>
 
           {/* MY OFFERS */}
 
           <button
             type="button"
-            className="auraNavItem"
-            onClick={() => {
-              openComingSoon(
-                "My Offers"
-              );
-            }}
+            className="navButton"
+            onClick={() =>
+              showComingSoon("My Offers")
+            }
           >
-            <span className="auraNavIcon">
-              <svg
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <rect
-                  x="5"
-                  y="4"
-                  width="14"
-                  height="17"
-                  rx="2"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                />
-                <path
-                  d="M9 4.5V3h6v1.5M8 9h8M8 13h8M8 17h5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </span>
+            <svg viewBox="0 0 24 24">
+              <rect
+                x="5"
+                y="4"
+                width="14"
+                height="17"
+                rx="2"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
 
-            <span className="auraNavLabel">
-              My Offers
-            </span>
+              <path
+                d="M9 4.5V3h6v1.5M8 9h8M8 13h8M8 17h5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
 
-            <span className="auraSoon">
-              Soon
-            </span>
+            <span>My Offers</span>
+
+            <small>Soon</small>
           </button>
 
           {/* PROFILE */}
 
           <button
             type="button"
-            className="auraNavItem"
-            onClick={() => {
-              openComingSoon(
-                "Profile"
-              );
-            }}
+            className="navButton"
+            onClick={() =>
+              showComingSoon("Profile")
+            }
           >
-            <span className="auraNavIcon">
-              <svg
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <circle
-                  cx="12"
-                  cy="8"
-                  r="3.2"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                />
-                <path
-                  d="M5 20c.8-3.5 3.1-5.2 7-5.2s6.2 1.7 7 5.2"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </span>
+            <svg viewBox="0 0 24 24">
+              <circle
+                cx="12"
+                cy="8"
+                r="3.2"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
 
-            <span className="auraNavLabel">
-              Profile
-            </span>
+              <path
+                d="M5 20c.8-3.5 3.1-5.2 7-5.2s6.2 1.7 7 5.2"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
 
-            <span className="auraSoon">
-              Soon
-            </span>
+            <span>Profile</span>
+
+            <small>Soon</small>
           </button>
 
         </nav>
 
-        {/* COMING SOON MODAL */}
+        {/* COMING SOON */}
 
         {comingSoon && (
           <div
-            className="comingOverlay"
-            onClick={
-              closeComingSoon
-            }
+            className="modalOverlay"
+            onClick={() => setComingSoon(null)}
           >
             <div
-              className="comingModal"
-              onClick={(event) =>
-                event.stopPropagation()
+              className="modal"
+              onClick={(e) =>
+                e.stopPropagation()
               }
             >
 
               <button
                 type="button"
-                className="comingClose"
-                onClick={
-                  closeComingSoon
+                className="modalClose"
+                onClick={() =>
+                  setComingSoon(null)
                 }
               >
                 ×
               </button>
 
-              <div className="comingIcon">
+              <div className="modalIcon">
                 ⏳
               </div>
 
-              <h2>
-                Coming Soon
-              </h2>
+              <h2>Coming Soon</h2>
 
               <p>
-                <strong>
-                  {comingSoon}
-                </strong>{" "}
-                is currently under
-                development.
+                <strong>{comingSoon}</strong>{" "}
+                is currently under development.
               </p>
 
-              <small>
-                We are working on it.
-                Stay tuned!
-              </small>
+              <span>
+                Stay tuned for the update.
+              </span>
 
               <button
                 type="button"
-                className="comingButton"
-                onClick={
-                  closeComingSoon
+                className="modalButton"
+                onClick={() =>
+                  setComingSoon(null)
                 }
               >
                 OK
@@ -1658,30 +1120,33 @@ export default function Home() {
 }
 
 /* =========================================================
-   GLOBAL CSS
+   CSS
 ========================================================= */
 
-const globalStyles = `
+const css = `
 * {
   box-sizing: border-box;
 }
 
 html {
   width: 100%;
-  max-width: 100%;
+  overflow-x: hidden;
   scroll-behavior: smooth;
 }
 
 body {
   margin: 0;
   width: 100%;
-  max-width: 100%;
   overflow-x: hidden;
-  background: #eaf2f4;
+  background: #edf5f7;
 }
 
 button {
   font-family: inherit;
+}
+
+button,
+a {
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -1689,25 +1154,87 @@ button:focus {
   outline: none;
 }
 
-button:disabled {
-  opacity: .65;
+/* ===============================
+   PAGE
+================================ */
+
+.page {
+  position: relative;
+  width: 100%;
+  max-width: 540px;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding:
+    10px
+    9px
+    calc(115px + env(safe-area-inset-bottom));
+
+  overflow-x: hidden;
+
+  background:
+    linear-gradient(
+      145deg,
+      #f0fafb 0%,
+      #f7fbff 55%,
+      #faf7ff 100%
+    );
+
+  color: #111827;
+
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
 }
 
-button,
-a {
-  touch-action: manipulation;
+.container {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
 }
 
-/* ========================================
-   ANIMATIONS
-======================================== */
+.ambient {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 50%;
+  filter: blur(80px);
+  z-index: 0;
+}
+
+.ambientOne {
+  width: 250px;
+  height: 250px;
+  top: -110px;
+  left: -100px;
+  background: rgba(37,99,235,.06);
+}
+
+.ambientTwo {
+  width: 280px;
+  height: 280px;
+  right: -130px;
+  bottom: -130px;
+  background: rgba(168,85,247,.055);
+}
+
+/* ===============================
+   ANIMATION
+================================ */
 
 .animateUp {
-  animation: auraUp .55s ease both;
+  animation:
+    auraUp .48s ease both;
 }
 
 .animateDown {
-  animation: auraDown .5s ease both;
+  animation:
+    auraDown .45s ease both;
 }
 
 .delay1 {
@@ -1733,7 +1260,7 @@ a {
 @keyframes auraUp {
   from {
     opacity: 0;
-    transform: translateY(14px);
+    transform: translateY(10px);
   }
 
   to {
@@ -1745,18 +1272,12 @@ a {
 @keyframes auraDown {
   from {
     opacity: 0;
-    transform: translateY(-10px);
+    transform: translateY(-8px);
   }
 
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
   }
 }
 
@@ -1771,296 +1292,1333 @@ a {
   }
 }
 
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @keyframes modalIn {
   from {
     opacity: 0;
-    transform: translateY(14px) scale(.94);
+    transform: scale(.94) translateY(10px);
   }
 
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: scale(1) translateY(0);
   }
 }
 
-/* ========================================
-   MOBILE APP WIDTH
-======================================== */
+/* ===============================
+   HEADER
+================================ */
 
-@media (min-width: 521px) {
-  body {
-    background: #eaf2f4;
-  }
-}
+.header {
+  width: 100%;
+  min-width: 0;
 
-/* ========================================
-   BOTTOM NAV - IMPORTANT
-======================================== */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 
-.auraBottomNav {
-  position: fixed !important;
+  gap: 10px;
 
-  left: 50% !important;
+  padding: 13px 13px;
 
-  bottom:
-    calc(8px + env(safe-area-inset-bottom))
-    !important;
+  margin-bottom: 10px;
 
-  transform:
-    translateX(-50%) !important;
+  border-radius: 20px;
 
-  width:
-    calc(100% - 18px) !important;
-
-  max-width:
-    520px !important;
-
-  height:
-    74px !important;
-
-  display:
-    grid !important;
-
-  grid-template-columns:
-    repeat(5, minmax(0, 1fr)) !important;
-
-  align-items:
-    center !important;
-
-  padding:
-    4px !important;
-
-  margin:
-    0 !important;
+  border: 1px solid #dfe8eb;
 
   background:
-    rgba(255,255,255,.98) !important;
-
-  border:
-    1px solid #dce6e9 !important;
-
-  border-radius:
-    25px !important;
+    rgba(255,255,255,.95);
 
   box-shadow:
-    0 15px 42px rgba(15,40,55,.17) !important;
-
-  backdrop-filter:
-    blur(18px) !important;
-
-  -webkit-backdrop-filter:
-    blur(18px) !important;
-
-  z-index:
-    99999 !important;
-
-  overflow:
-    visible !important;
+    0 8px 26px
+    rgba(20,60,80,.055);
 }
 
-/* ALL BOTTOM BUTTONS */
-
-.auraBottomNav button {
-  appearance: none !important;
-  -webkit-appearance: none !important;
-
-  border: 0 !important;
-  outline: 0 !important;
-
-  margin: 0 !important;
-
-  font-family:
-    Inter,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif !important;
-
-  cursor: pointer !important;
-
-  -webkit-tap-highlight-color:
-    transparent !important;
+.brand {
+  font-family: Georgia, serif;
+  font-size: 23px;
+  line-height: 1;
+  letter-spacing: -1px;
+  white-space: nowrap;
 }
 
-/* NORMAL ITEMS */
+.brand span {
+  color: #111827;
+}
 
-.auraNavItem {
-  position: relative !important;
+.brand b {
+  color: #209657;
+  font-weight: 500;
+}
 
-  width: 100% !important;
+.tagline {
+  margin-top: 5px;
+  color: #99a5ac;
+  font-family: Georgia, serif;
+  font-size: 9px;
+}
 
-  height: 64px !important;
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
 
-  padding: 0 !important;
+.notificationButton {
+  width: 39px;
+  height: 39px;
+
+  border: 1px solid #dfe7ea;
+  border-radius: 13px;
+
+  background: #fff;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.logoutButton {
+  height: 39px;
+
+  border: none;
+  border-radius: 12px;
+
+  padding: 0 14px;
+
+  background: #153544;
+  color: #fff;
+
+  font-family: Georgia, serif;
+  font-size: 11px;
+
+  cursor: pointer;
+}
+
+/* ===============================
+   WELCOME
+================================ */
+
+.welcomeCard {
+  width: 100%;
+  min-width: 0;
+
+  padding: 18px;
+
+  margin-bottom: 10px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 10px;
+
+  border-radius: 22px;
+  border: 1px solid #dfe8eb;
 
   background:
-    transparent !important;
+    linear-gradient(
+      135deg,
+      #ffffff,
+      #f8fbff 55%,
+      #f5f0ff
+    );
 
-  color:
-    #7c878d !important;
+  box-shadow:
+    0 9px 28px
+    rgba(20,60,80,.055);
+}
 
-  display:
-    flex !important;
+.welcomeLeft {
+  min-width: 0;
+  flex: 1;
 
-  flex-direction:
-    column !important;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
 
-  align-items:
-    center !important;
+.avatar {
+  width: 51px;
+  height: 51px;
+  min-width: 51px;
 
-  justify-content:
-    center !important;
+  border-radius: 16px;
 
-  gap:
-    3px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 
-  border-radius:
-    17px !important;
+  color: white;
+
+  font-family: Georgia, serif;
+  font-size: 20px;
+
+  background:
+    linear-gradient(
+      135deg,
+      #155eef,
+      #159d65
+    );
+
+  box-shadow:
+    0 8px 20px
+    rgba(37,99,235,.18);
+}
+
+.welcomeText {
+  min-width: 0;
+}
+
+.welcomeText p {
+  margin: 0 0 2px;
+
+  color: #71808a;
+
+  font-family: Georgia, serif;
+  font-size: 11px;
+}
+
+.welcomeText h1 {
+  margin: 0;
+
+  font-family: Georgia, serif;
+
+  font-size: 25px;
+  line-height: 1.05;
+
+  font-weight: 500;
+
+  color: #111827;
+
+  overflow-wrap: anywhere;
+}
+
+.welcomeText span {
+  display: block;
+
+  margin-top: 5px;
+
+  color: #71808a;
+
+  font-family: Georgia, serif;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.startEarning {
+  flex-shrink: 0;
+
+  border: none;
+  border-radius: 12px;
+
+  padding: 10px 11px;
+
+  background: #ecfaf5;
+  color: #16804e;
+
+  font-family: Georgia, serif;
+  font-size: 9px;
+
+  cursor: pointer;
+
+  white-space: nowrap;
+}
+
+/* ===============================
+   ID CARD
+================================ */
+
+.idCard {
+  width: 100%;
+
+  display: flex;
+  align-items: center;
+
+  gap: 10px;
+
+  padding: 12px 14px;
+
+  margin-bottom: 10px;
+
+  border:
+    1px solid #dfe8eb;
+
+  border-radius: 19px;
+
+  background: rgba(255,255,255,.96);
+
+  box-shadow:
+    0 7px 22px
+    rgba(20,60,80,.045);
+}
+
+.idIcon {
+  width: 41px;
+  height: 41px;
+  min-width: 41px;
+
+  border-radius: 13px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  color: #fff;
+
+  font-size: 10px;
+  font-weight: 900;
+
+  background:
+    linear-gradient(
+      135deg,
+      #155eef,
+      #159d65
+    );
+}
+
+.idInfo {
+  min-width: 0;
+  flex: 1;
+}
+
+.idInfo span {
+  display: block;
+
+  color: #9aa6ae;
+
+  font-size: 8px;
+  font-weight: 800;
+
+  letter-spacing: .8px;
+}
+
+.idInfo strong {
+  display: block;
+
+  margin-top: 2px;
+
+  font-family: Georgia, serif;
+  font-size: 16px;
+  font-weight: 500;
+
+  color: #111827;
+}
+
+.verified {
+  flex-shrink: 0;
+
+  padding: 8px 10px;
+
+  border-radius: 999px;
+
+  background: #ecfdf5;
+  color: #059669;
+
+  font-size: 8px;
+  font-weight: 850;
+}
+
+/* ===============================
+   STATS
+================================ */
+
+.statsSection {
+  width: 100%;
+
+  display: grid;
+
+  grid-template-columns:
+    minmax(0, 1fr)
+    minmax(0, 1fr);
+
+  gap: 10px;
+
+  margin-bottom: 20px;
+}
+
+.walletCard {
+  grid-column: 1 / -1;
+
+  min-width: 0;
+
+  min-height: 168px;
+
+  padding: 19px;
+
+  border-radius: 22px;
+
+  color: #fff;
+
+  background:
+    linear-gradient(
+      135deg,
+      #123746,
+      #164b59 55%,
+      #166a51
+    );
+
+  box-shadow:
+    0 13px 32px
+    rgba(18,55,70,.17);
+
+  overflow: hidden;
+}
+
+.walletTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+
+  gap: 10px;
+}
+
+.walletTitle {
+  display: block;
+
+  color: rgba(255,255,255,.78);
+
+  font-family: Georgia, serif;
+  font-size: 11px;
+}
+
+.walletAmount {
+  display: block;
+
+  margin-top: 5px;
+
+  font-family: Georgia, serif;
+
+  font-size: 39px;
+  line-height: 1;
+
+  font-weight: 500;
+
+  letter-spacing: -1.5px;
+}
+
+.walletIcon {
+  width: 49px;
+  height: 49px;
+  min-width: 49px;
+
+  border-radius: 15px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  background:
+    rgba(255,255,255,.13);
+
+  font-size: 21px;
+}
+
+.walletBottom {
+  margin-top: 27px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 10px;
+}
+
+.walletBottom > span {
+  color: rgba(255,255,255,.72);
+
+  font-family: Georgia, serif;
+  font-size: 10px;
+}
+
+.withdrawButton {
+  flex-shrink: 0;
+
+  border: none;
+  border-radius: 12px;
+
+  padding: 10px 14px;
+
+  background: #fff;
+  color: #153b48;
+
+  font-family: Georgia, serif;
+  font-size: 10px;
+
+  cursor: pointer;
+}
+
+.statCard {
+  min-width: 0;
+
+  min-height: 151px;
+
+  padding: 15px;
+
+  border-radius: 20px;
+
+  border:
+    1px solid #e1e9ec;
+
+  background:
+    rgba(255,255,255,.96);
+
+  box-shadow:
+    0 7px 22px
+    rgba(20,60,80,.045);
+
+  overflow: hidden;
+}
+
+.statIcon {
+  width: 38px;
+  height: 38px;
+
+  border-radius: 12px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  margin-bottom: 13px;
+
+  font-size: 17px;
+}
+
+.pendingIcon {
+  background: #f3e8ff;
+  color: #9333ea;
+}
+
+.earnedIcon {
+  background: #fff7ed;
+  color: #f97316;
+}
+
+.statLabel {
+  display: block;
+
+  color: #71808a;
+
+  font-family: Georgia, serif;
+  font-size: 10px;
+
+  line-height: 1.3;
+}
+
+.statAmount {
+  display: block;
+
+  margin-top: 4px;
+
+  color: #111827;
+
+  font-family: Georgia, serif;
+
+  font-size: 25px;
+  font-weight: 500;
+
+  white-space: nowrap;
+}
+
+.statHint {
+  display: block;
+
+  margin-top: 5px;
+
+  color: #9aa6ae;
+
+  font-family: Georgia, serif;
+
+  font-size: 8px;
+
+  line-height: 1.3;
+}
+
+/* ===============================
+   SECTIONS
+================================ */
+
+.section {
+  width: 100%;
+  min-width: 0;
+  margin-bottom: 23px;
+}
+
+.sectionHeader {
+  width: 100%;
+
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+
+  gap: 8px;
+
+  margin-bottom: 11px;
+}
+
+.sectionHeader h2 {
+  margin: 0;
+
+  font-family: Georgia, serif;
+
+  font-size: 20px;
+  font-weight: 500;
+
+  letter-spacing: -.3px;
+}
+
+.sectionHeader p {
+  margin: 4px 0 0;
+
+  color: #71808a;
+
+  font-family: Georgia, serif;
+
+  font-size: 9px;
+}
+
+/* ===============================
+   QUICK ACTIONS
+================================ */
+
+.quickGrid {
+  width: 100%;
+
+  display: grid;
+
+  grid-template-columns:
+    repeat(2, minmax(0, 1fr));
+
+  gap: 9px;
+}
+
+.quickCard {
+  width: 100%;
+  min-width: 0;
+
+  min-height: 75px;
+
+  display: flex;
+  align-items: center;
+
+  gap: 8px;
+
+  padding: 11px;
+
+  border:
+    1px solid #e1e9ec;
+
+  border-radius: 17px;
+
+  background: #fff;
+
+  box-shadow:
+    0 7px 20px
+    rgba(20,60,80,.04);
+
+  text-align: left;
+
+  cursor: pointer;
+
+  overflow: hidden;
+}
+
+.quickCard:active {
+  transform: scale(.98);
+}
+
+.quickCard > div:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+}
+
+.quickCard strong {
+  display: block;
+
+  color: #111827;
+
+  font-size: 10px;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.quickCard span {
+  display: block;
+
+  margin-top: 3px;
+
+  color: #94a3b8;
+
+  font-size: 8px;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.quickCard > b {
+  flex-shrink: 0;
+
+  color: #94a3b8;
+
+  font-size: 14px;
+}
+
+.quickIcon {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 12px;
+
+  font-size: 17px;
+}
+
+.reward {
+  background: #fff1f2;
+}
+
+.money {
+  background: #ecfdf5;
+}
+
+.refer {
+  background: #fdf2f8;
+}
+
+.support {
+  background: #eff6ff;
+}
+
+/* ===============================
+   OFFERS
+================================ */
+
+.offerCount {
+  flex-shrink: 0;
+
+  padding: 6px 9px;
+
+  border-radius: 999px;
+
+  background: #ecfdf5;
+  color: #047857;
+
+  font-size: 8px;
+  font-weight: 850;
+}
+
+.offersGrid {
+  width: 100%;
+
+  display: grid;
+
+  grid-template-columns:
+    1fr;
+
+  gap: 11px;
+}
+
+.offerCard {
+  width: 100%;
+  min-width: 0;
+
+  overflow: hidden;
+
+  border-radius: 19px;
+
+  border:
+    1px solid #e1e9ec;
+
+  background: #fff;
+
+  box-shadow:
+    0 8px 24px
+    rgba(20,60,80,.045);
+}
+
+.offerImageBox {
+  position: relative;
+
+  width: 100%;
+  height: 165px;
+
+  overflow: hidden;
+
+  background:
+    linear-gradient(
+      135deg,
+      #eef7f8,
+      #f4f0ff
+    );
+}
+
+.offerImageBox img {
+  width: 100%;
+  height: 100%;
+
+  display: block;
+
+  object-fit: cover;
+}
+
+.offerPlaceholder {
+  width: 100%;
+  height: 100%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  font-size: 42px;
+}
+
+.rewardBadge {
+  position: absolute;
+
+  right: 10px;
+  bottom: 10px;
+
+  padding: 7px 10px;
+
+  border-radius: 10px;
+
+  background: #fff;
+  color: #059669;
+
+  font-size: 10px;
+  font-weight: 900;
+
+  box-shadow:
+    0 5px 15px
+    rgba(0,0,0,.1);
+}
+
+.offerBody {
+  padding: 13px;
+}
+
+.offerMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 7px;
+}
+
+.category {
+  max-width: 60%;
+
+  padding: 5px 7px;
+
+  border-radius: 8px;
+
+  background: #eff6ff;
+  color: #2563eb;
+
+  font-size: 8px;
+  font-weight: 750;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.available {
+  color: #059669;
+
+  font-size: 8px;
+  font-weight: 750;
+
+  white-space: nowrap;
+}
+
+.offerBody h3 {
+  margin: 9px 0 5px;
+
+  color: #111827;
+
+  font-family: Georgia, serif;
+
+  font-size: 17px;
+  font-weight: 600;
+
+  overflow-wrap: anywhere;
+}
+
+.offerBody p {
+  margin: 0;
+
+  color: #64748b;
+
+  font-size: 9px;
+
+  line-height: 1.5;
+}
+
+.offerButton {
+  width: 100%;
+
+  margin-top: 11px;
+
+  border: none;
+  border-radius: 11px;
+
+  padding: 11px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  gap: 8px;
+
+  background:
+    linear-gradient(
+      90deg,
+      #155eef,
+      #4f46e5
+    );
+
+  color: #fff;
+
+  font-size: 9px;
+  font-weight: 850;
+
+  cursor: pointer;
+}
+
+.offerButton:disabled {
+  opacity: .6;
+}
+
+/* ===============================
+   EMPTY
+================================ */
+
+.emptyCard {
+  width: 100%;
+
+  padding: 30px 16px;
+
+  text-align: center;
+
+  border:
+    1px solid #e1e9ec;
+
+  border-radius: 19px;
+
+  background:
+    rgba(255,255,255,.94);
+}
+
+.emptyIcon {
+  width: 56px;
+  height: 56px;
+
+  margin: 0 auto 11px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 17px;
+
+  background: #eef2ff;
+
+  font-size: 24px;
+}
+
+.emptyCard h3 {
+  margin: 0 0 4px;
+
+  color: #111827;
+
+  font-size: 14px;
+}
+
+.emptyCard p {
+  margin: 0;
+
+  color: #94a3b8;
+
+  font-size: 9px;
+}
+
+/* ===============================
+   TRANSACTIONS
+================================ */
+
+.transactions {
+  width: 100%;
+
+  overflow: hidden;
+
+  border:
+    1px solid #e1e9ec;
+
+  border-radius: 18px;
+
+  background: #fff;
+}
+
+.transaction {
+  width: 100%;
+
+  padding: 12px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 10px;
+
+  border-bottom:
+    1px solid #eef2f4;
+}
+
+.transaction:last-child {
+  border-bottom: none;
+}
+
+.transactionLeft {
+  min-width: 0;
+  flex: 1;
+
+  display: flex;
+  align-items: center;
+
+  gap: 9px;
+}
+
+.transactionIcon {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+
+  border-radius: 11px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  font-weight: 900;
+}
+
+.transactionIcon.green {
+  background: #ecfdf5;
+}
+
+.transactionIcon.red {
+  background: #fff1f2;
+}
+
+.transactionInfo {
+  min-width: 0;
+}
+
+.transactionInfo strong {
+  display: block;
+
+  max-width: 190px;
+
+  color: #111827;
+
+  font-size: 9px;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  text-transform: capitalize;
+}
+
+.transactionInfo span {
+  display: block;
+
+  margin-top: 3px;
+
+  color: #94a3b8;
+
+  font-size: 8px;
+}
+
+.transactionAmount {
+  flex-shrink: 0;
+
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.greenText {
+  color: #059669;
+}
+
+.redText {
+  color: #ef4444;
+}
+
+/* ===============================
+   FOOTER
+================================ */
+
+.footer {
+  width: 100%;
+
+  padding:
+    12px
+    3px
+    5px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 10px;
+
+  color: #94a3b8;
+
+  font-size: 8px;
+}
+
+.footer strong {
+  display: block;
+
+  font-family: Georgia, serif;
+
+  font-size: 12px;
+}
+
+.footer strong span {
+  color: #111827;
+}
+
+.footer strong b {
+  color: #209657;
+  font-weight: 500;
+}
+
+.footer small {
+  display: block;
+
+  margin-top: 3px;
+
+  font-size: 7px;
+}
+
+/* =================================================
+   BOTTOM NAV
+================================================= */
+
+.bottomNav {
+  position: fixed;
+
+  left: 50%;
+  bottom:
+    calc(8px + env(safe-area-inset-bottom));
+
+  transform: translateX(-50%);
+
+  width:
+    calc(100% - 18px);
+
+  max-width: 520px;
+
+  height: 76px;
+
+  padding: 4px;
+
+  display: grid;
+
+  grid-template-columns:
+    repeat(5, minmax(0, 1fr));
+
+  align-items: center;
+
+  border:
+    1px solid #dce6e9;
+
+  border-radius: 26px;
+
+  background:
+    rgba(255,255,255,.98);
+
+  box-shadow:
+    0 16px 45px
+    rgba(15,40,55,.18);
+
+  backdrop-filter:
+    blur(18px);
+
+  -webkit-backdrop-filter:
+    blur(18px);
+
+  z-index: 99999;
+
+  overflow: visible;
+}
+
+/* NORMAL NAV BUTTON */
+
+.navButton {
+  position: relative;
+
+  width: 100%;
+  height: 65px;
+
+  min-width: 0;
+
+  padding: 0;
+  margin: 0;
+
+  border: none;
+  outline: none;
+
+  appearance: none;
+  -webkit-appearance: none;
+
+  background: transparent;
+
+  color: #7d888e;
+
+  display: flex;
+  flex-direction: column;
+
+  align-items: center;
+  justify-content: center;
+
+  gap: 4px;
+
+  cursor: pointer;
+
+  border-radius: 17px;
 
   transition:
     transform .15s ease,
-    color .15s ease,
-    background .15s ease !important;
+    color .15s ease;
 }
 
-.auraNavItem:active {
-  transform:
-    scale(.91) !important;
+.navButton:active {
+  transform: scale(.9);
 }
 
-.auraNavItem.auraNavActive {
-  color:
-    #155eef !important;
+.navButton.active {
+  color: #155eef;
 }
 
-.auraNavIcon {
-  width:
-    27px !important;
+.navButton svg {
+  width: 24px;
+  height: 24px;
 
-  height:
-    27px !important;
-
-  display:
-    flex !important;
-
-  align-items:
-    center !important;
-
-  justify-content:
-    center !important;
-
-  color:
-    currentColor !important;
+  display: block;
 }
 
-.auraNavIcon svg {
-  width:
-    23px !important;
+.navButton span {
+  display: block;
 
-  height:
-    23px !important;
+  color: currentColor;
 
-  display:
-    block !important;
+  font-size: 8px;
+  line-height: 11px;
+  font-weight: 700;
+
+  white-space: nowrap;
 }
 
-.auraNavLabel {
-  display:
-    block !important;
+.navButton small {
+  position: absolute;
 
-  font-size:
-    8px !important;
+  top: 3px;
+  right: 0;
 
-  line-height:
-    11px !important;
+  padding: 2px 4px;
 
-  font-weight:
-    700 !important;
+  border-radius: 999px;
 
-  color:
-    currentColor !important;
-
-  white-space:
-    nowrap !important;
-}
-
-/* ========================================
-   TELEGRAM CENTER BUTTON
-======================================== */
-
-.auraTelegramNav {
-  position: relative !important;
-
-  width:
-    100% !important;
-
-  height:
-    90px !important;
-
-  margin:
-    -20px 0 0 !important;
-
-  padding:
-    0 !important;
-
-  background:
-    transparent !important;
-
-  color:
-    #68767d !important;
-
-  display:
-    flex !important;
-
-  flex-direction:
-    column !important;
-
-  align-items:
-    center !important;
-
-  justify-content:
-    flex-start !important;
-
-  gap:
-    3px !important;
-
-  transition:
-    transform .15s ease !important;
-}
-
-.auraTelegramNav:active {
-  transform:
-    scale(.92) !important;
-}
-
-.auraTelegramCircle {
-  width:
-    66px !important;
-
-  height:
-    66px !important;
-
-  min-width:
-    66px !important;
-
-  min-height:
-    66px !important;
-
-  display:
-    flex !important;
-
-  align-items:
-    center !important;
-
-  justify-content:
-    center !important;
-
-  border-radius:
-    50% !important;
+  background: #fff0f3;
+  color: #e11d48;
 
   border:
-    4px solid #fff !important;
+    1px solid #ffd5df;
+
+  font-size: 5px;
+  line-height: 7px;
+  font-weight: 850;
+}
+
+/* =================================================
+   TELEGRAM CENTER
+================================================= */
+
+.telegramButton {
+  position: relative;
+
+  width: 100%;
+  height: 94px;
+
+  margin-top: -21px;
+
+  padding: 0;
+
+  border: none;
+  outline: none;
+
+  appearance: none;
+  -webkit-appearance: none;
+
+  background: transparent;
+
+  display: flex;
+  flex-direction: column;
+
+  align-items: center;
+  justify-content: flex-start;
+
+  gap: 4px;
+
+  color: #68767d;
+
+  cursor: pointer;
+
+  transition:
+    transform .15s ease;
+}
+
+.telegramButton:active {
+  transform: scale(.91);
+}
+
+.telegramCircle {
+  width: 68px;
+  height: 68px;
+
+  min-width: 68px;
+  min-height: 68px;
+
+  border:
+    4px solid #fff;
+
+  border-radius: 50%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
 
   background:
     linear-gradient(
@@ -2068,1144 +2626,442 @@ a {
       #29a9e8,
       #168fd0,
       #0879b5
-    ) !important;
+    );
 
   box-shadow:
-    0 9px 25px
-    rgba(22,143,208,.30) !important;
+    0 10px 27px
+    rgba(22,143,208,.32);
 
   animation:
-    telegramFloat 2.8s ease-in-out infinite !important;
-
-  transition:
-    transform .15s ease !important;
+    telegramFloat 2.8s
+    ease-in-out
+    infinite;
 }
 
-.auraTelegramCircle svg {
-  width:
-    31px !important;
+.telegramCircle svg {
+  width: 32px;
+  height: 32px;
 
-  height:
-    31px !important;
-
-  display:
-    block !important;
+  display: block;
 }
 
-.telegramText {
-  display:
-    block !important;
+.telegramButton > span:last-child {
+  color: #68767d;
 
-  font-size:
-    8px !important;
+  font-size: 8px;
+  line-height: 11px;
 
-  line-height:
-    11px !important;
+  font-weight: 700;
 
-  font-weight:
-    700 !important;
-
-  color:
-    #68767d !important;
-
-  white-space:
-    nowrap !important;
+  white-space: nowrap;
 }
 
-/* SOON BADGE */
+/* ===============================
+   MODAL
+================================ */
 
-.auraSoon {
-  position:
-    absolute !important;
+.modalOverlay {
+  position: fixed;
 
-  top:
-    3px !important;
+  inset: 0;
 
-  right:
-    1px !important;
+  z-index: 100000;
 
-  padding:
-    2px 4px !important;
+  padding: 20px;
 
-  border-radius:
-    999px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 
   background:
-    #fff0f3 !important;
-
-  color:
-    #e11d48 !important;
-
-  border:
-    1px solid #ffd6df !important;
-
-  font-size:
-    5px !important;
-
-  line-height:
-    8px !important;
-
-  font-weight:
-    850 !important;
-}
-
-/* ========================================
-   COMING SOON
-======================================== */
-
-.comingOverlay {
-  position:
-    fixed !important;
-
-  inset:
-    0 !important;
-
-  z-index:
-    100000 !important;
-
-  display:
-    flex !important;
-
-  align-items:
-    center !important;
-
-  justify-content:
-    center !important;
-
-  padding:
-    20px !important;
-
-  background:
-    rgba(10,25,35,.48) !important;
+    rgba(10,25,35,.48);
 
   backdrop-filter:
-    blur(7px) !important;
+    blur(7px);
 
   -webkit-backdrop-filter:
-    blur(7px) !important;
+    blur(7px);
 }
 
-.comingModal {
-  position:
-    relative !important;
+.modal {
+  position: relative;
 
   width:
-    min(100%, 350px) !important;
+    min(100%, 350px);
 
   padding:
-    27px 21px 21px !important;
+    27px 21px 21px;
 
-  border-radius:
-    25px !important;
+  border-radius: 25px;
 
-  background:
-    #fff !important;
+  background: #fff;
 
-  text-align:
-    center !important;
+  text-align: center;
 
   box-shadow:
     0 25px 70px
-    rgba(10,30,45,.25) !important;
+    rgba(10,30,45,.25);
 
   animation:
-    modalIn .25s ease both !important;
+    modalIn .25s ease both;
 }
 
-.comingClose {
-  position:
-    absolute !important;
+.modalClose {
+  position: absolute;
 
-  top:
-    9px !important;
+  top: 9px;
+  right: 11px;
 
-  right:
-    11px !important;
+  width: 29px;
+  height: 29px;
 
-  width:
-    29px !important;
+  border: none;
 
-  height:
-    29px !important;
+  border-radius: 50%;
 
-  border:
-    0 !important;
+  background: #f1f5f7;
 
-  border-radius:
-    50% !important;
+  color: #64748b;
 
-  background:
-    #f1f5f7 !important;
+  font-size: 20px;
 
-  color:
-    #64748b !important;
-
-  font-size:
-    20px !important;
-
-  cursor:
-    pointer !important;
+  cursor: pointer;
 }
 
-.comingIcon {
-  width:
-    66px !important;
+.modalIcon {
+  width: 66px;
+  height: 66px;
 
-  height:
-    66px !important;
+  margin: 0 auto 13px;
 
-  margin:
-    0 auto 13px !important;
+  border-radius: 21px;
 
-  border-radius:
-    21px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 
   background:
     linear-gradient(
       135deg,
       #f0e7ff,
       #e8f0ff
-    ) !important;
+    );
 
-  display:
-    flex !important;
-
-  align-items:
-    center !important;
-
-  justify-content:
-    center !important;
-
-  font-size:
-    29px !important;
+  font-size: 29px;
 }
 
-.comingModal h2 {
-  margin:
-    0 0 8px !important;
+.modal h2 {
+  margin: 0 0 8px;
 
-  color:
-    #111827 !important;
+  color: #111827;
 
-  font-size:
-    21px !important;
+  font-size: 21px;
 }
 
-.comingModal p {
-  margin:
-    0 !important;
+.modal p {
+  margin: 0;
 
-  color:
-    #64748b !important;
+  color: #64748b;
 
-  font-size:
-    11px !important;
-
-  line-height:
-    1.6 !important;
+  font-size: 11px;
+  line-height: 1.6;
 }
 
-.comingModal small {
-  display:
-    block !important;
+.modal > span {
+  display: block;
 
-  margin-top:
-    5px !important;
+  margin-top: 5px;
 
-  color:
-    #94a3b8 !important;
+  color: #94a3b8;
 
-  font-size:
-    9px !important;
+  font-size: 9px;
 }
 
-.comingButton {
-  width:
-    100% !important;
+.modalButton {
+  width: 100%;
 
-  margin-top:
-    18px !important;
+  margin-top: 18px;
 
-  padding:
-    11px !important;
+  padding: 11px;
 
-  border:
-    0 !important;
+  border: none;
 
-  border-radius:
-    12px !important;
+  border-radius: 12px;
 
   background:
     linear-gradient(
       90deg,
       #155eef,
       #6d28d9
-    ) !important;
+    );
 
-  color:
-    #fff !important;
+  color: #fff;
 
-  font-size:
-    10px !important;
+  font-size: 10px;
+  font-weight: 850;
 
-  font-weight:
-    850 !important;
-
-  cursor:
-    pointer !important;
+  cursor: pointer;
 }
 
-/* ========================================
-   SMALL MOBILE
-======================================== */
+/* ===============================
+   LOADING
+================================ */
 
-@media (max-width: 360px) {
+.loadingPage {
+  width: 100%;
+  min-height: 100vh;
 
-  .auraBottomNav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  background:
+    linear-gradient(
+      145deg,
+      #f0fafb,
+      #f7fbff,
+      #faf7ff
+    );
+}
+
+.loadingBox {
+  width: 260px;
+
+  padding: 30px;
+
+  border-radius: 24px;
+
+  background: #fff;
+
+  text-align: center;
+
+  box-shadow:
+    0 20px 60px
+    rgba(30,64,175,.10);
+}
+
+.loadingBrand {
+  margin-bottom: 20px;
+
+  font-family: Georgia, serif;
+
+  font-size: 24px;
+}
+
+.loadingBrand b {
+  color: #209657;
+}
+
+.loader {
+  width: 30px;
+  height: 30px;
+
+  margin: 0 auto 13px;
+
+  border:
+    3px solid #e5e7eb;
+
+  border-top-color: #2563eb;
+  border-right-color: #16a34a;
+
+  border-radius: 50%;
+
+  animation:
+    spin .75s linear infinite;
+}
+
+.loadingBox p {
+  margin: 0;
+
+  color: #7b8790;
+
+  font-size: 10px;
+}
+
+/* =================================================
+   MOBILE
+================================================= */
+
+@media (max-width: 520px) {
+
+  .page {
+    max-width: 100%;
+  }
+
+  .header {
+    padding: 12px;
+  }
+
+  .welcomeCard {
+    padding: 17px;
+  }
+
+  .startEarning {
+    padding: 9px 8px;
+  }
+
+  .walletAmount {
+    font-size: 37px;
+  }
+
+  .quickGrid {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+
+  .bottomNav {
     width:
-      calc(100% - 12px) !important;
+      calc(100% - 16px);
 
-    height:
-      70px !important;
+    max-width: 520px;
+
+    height: 75px;
+  }
+}
+
+/* =================================================
+   VERY SMALL MOBILE
+================================================= */
+
+@media (max-width: 370px) {
+
+  .page {
+    padding-left: 7px;
+    padding-right: 7px;
+
+    padding-bottom:
+      calc(108px + env(safe-area-inset-bottom));
+  }
+
+  .brand {
+    font-size: 20px;
+  }
+
+  .logoutButton {
+    padding: 0 11px;
+  }
+
+  .notificationButton {
+    width: 36px;
+    height: 36px;
+  }
+
+  .welcomeCard {
+    padding: 14px;
+  }
+
+  .avatar {
+    width: 45px;
+    height: 45px;
+    min-width: 45px;
+  }
+
+  .welcomeText h1 {
+    font-size: 22px;
+  }
+
+  .startEarning {
+    font-size: 7px;
+    padding: 8px 7px;
+  }
+
+  .walletCard {
+    min-height: 157px;
+    padding: 16px;
+  }
+
+  .walletAmount {
+    font-size: 34px;
+  }
+
+  .walletIcon {
+    width: 43px;
+    height: 43px;
+    min-width: 43px;
+  }
+
+  .statCard {
+    min-height: 142px;
+    padding: 13px;
+  }
+
+  .statAmount {
+    font-size: 22px;
+  }
+
+  .quickCard {
+    min-height: 70px;
+    padding: 9px;
+  }
+
+  .quickIcon {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+  }
+
+  .quickCard strong {
+    font-size: 9px;
+  }
+
+  .quickCard span {
+    font-size: 7px;
+  }
+
+  .bottomNav {
+    width:
+      calc(100% - 12px);
+
+    height: 71px;
 
     bottom:
-      calc(5px + env(safe-area-inset-bottom))
-      !important;
+      calc(5px + env(safe-area-inset-bottom));
   }
 
-  .auraNavItem {
-    height:
-      60px !important;
+  .navButton {
+    height: 61px;
   }
 
-  .auraNavIcon {
-    width:
-      25px !important;
-
-    height:
-      25px !important;
+  .navButton svg {
+    width: 22px;
+    height: 22px;
   }
 
-  .auraNavIcon svg {
-    width:
-      21px !important;
-
-    height:
-      21px !important;
+  .navButton span,
+  .telegramButton > span:last-child {
+    font-size: 7px;
   }
 
-  .auraNavLabel,
-  .telegramText {
-    font-size:
-      7px !important;
+  .telegramButton {
+    height: 87px;
+    margin-top: -18px;
   }
 
-  .auraTelegramCircle {
-    width:
-      62px !important;
-
-    height:
-      62px !important;
-
-    min-width:
-      62px !important;
-
-    min-height:
-      62px !important;
+  .telegramCircle {
+    width: 62px;
+    height: 62px;
+    min-width: 62px;
+    min-height: 62px;
   }
 
-  .auraTelegramCircle svg {
-    width:
-      28px !important;
-
-    height:
-      28px !important;
+  .telegramCircle svg {
+    width: 29px;
+    height: 29px;
   }
 }
 
-/* ========================================
-   DESKTOP STILL MOBILE APP WIDTH
-======================================== */
+/* =================================================
+   DESKTOP — KEEP MOBILE APP FEEL
+================================================= */
 
 @media (min-width: 521px) {
 
-  .auraBottomNav {
-    width:
-      510px !important;
+  .page {
+    max-width: 540px;
+  }
+
+  .bottomNav {
+    width: 520px;
   }
 }
 `;
-
-/* =========================================================
-   STYLES
-========================================================= */
-
-const styles: Record<
-  string,
-  CSSProperties
-> = {
-
-  page: {
-    minHeight: "100vh",
-    width: "100%",
-    maxWidth: "540px",
-    margin: "0 auto",
-    boxSizing: "border-box",
-    background:
-      "linear-gradient(145deg, #f1fbfc 0%, #f7fbff 55%, #faf7ff 100%)",
-    fontFamily:
-      "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    color: "#111827",
-    padding:
-      "10px 9px 125px",
-    position: "relative",
-    overflow: "hidden",
-  },
-
-  backgroundGlowOne: {
-    position: "fixed",
-    width: "260px",
-    height: "260px",
-    borderRadius: "50%",
-    background:
-      "rgba(37,99,235,.07)",
-    filter: "blur(70px)",
-    top: "-100px",
-    left: "-100px",
-    pointerEvents: "none",
-  },
-
-  backgroundGlowTwo: {
-    position: "fixed",
-    width: "280px",
-    height: "280px",
-    borderRadius: "50%",
-    background:
-      "rgba(168,85,247,.06)",
-    filter: "blur(75px)",
-    bottom: "-120px",
-    right: "-100px",
-    pointerEvents: "none",
-  },
-
-  container: {
-    width: "100%",
-    maxWidth: "520px",
-    margin: "0 auto",
-    position: "relative",
-    zIndex: 1,
-  },
-
-  loadingPage: {
-    minHeight: "100vh",
-    width: "100%",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background:
-      "linear-gradient(145deg,#f1fbfc,#f7fbff,#faf7ff)",
-    fontFamily:
-      "Inter,system-ui,sans-serif",
-  },
-
-  loadingBox: {
-    width: "260px",
-    padding: "30px",
-    borderRadius: "24px",
-    background: "#fff",
-    textAlign: "center",
-    boxShadow:
-      "0 20px 60px rgba(30,64,175,.10)",
-  },
-
-  loadingLogo: {
-    fontSize: "25px",
-    fontWeight: 950,
-    letterSpacing: "-1px",
-    marginBottom: "20px",
-  },
-
-  loader: {
-    width: "29px",
-    height: "29px",
-    border:
-      "3px solid #e5e7eb",
-    borderTopColor:
-      "#2563eb",
-    borderRightColor:
-      "#16a34a",
-    borderRadius: "50%",
-    margin:
-      "0 auto 13px",
-    animation:
-      "spin .75s linear infinite",
-  },
-
-  loadingText: {
-    margin: 0,
-    color: "#7b8790",
-    fontSize: "10px",
-  },
-
-  header: {
-    background:
-      "rgba(255,255,255,.94)",
-    backdropFilter:
-      "blur(16px)",
-    WebkitBackdropFilter:
-      "blur(16px)",
-    padding: "13px 12px",
-    borderRadius: "19px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: "10px",
-    border:
-      "1px solid #dfe9ec",
-    boxShadow:
-      "0 8px 26px rgba(20,60,80,.055)",
-    minWidth: 0,
-  },
-
-  brandArea: {
-    minWidth: 0,
-  },
-
-  brand: {
-    fontSize: "22px",
-    fontWeight: 950,
-    letterSpacing: "-1px",
-    lineHeight: 1,
-  },
-
-  tagline: {
-    fontSize: "9px",
-    color: "#96a2aa",
-    marginTop: "5px",
-  },
-
-  headerRight: {
-    display: "flex",
-    alignItems: "center",
-    gap: "7px",
-    flexShrink: 0,
-  },
-
-  notificationButton: {
-    width: "38px",
-    height: "38px",
-    borderRadius: "12px",
-    border:
-      "1px solid #dfe7ea",
-    background: "#fff",
-    cursor: "pointer",
-    fontSize: "16px",
-  },
-
-  logout: {
-    background: "#153342",
-    color: "#fff",
-    border: "none",
-    borderRadius: "11px",
-    padding: "10px 13px",
-    fontWeight: 750,
-    cursor: "pointer",
-    fontSize: "10px",
-  },
-
-  welcome: {
-    background:
-      "linear-gradient(135deg,#fff 0%,#f8fbff 55%,#f5f0ff 100%)",
-    borderRadius: "21px",
-    padding: "17px",
-    marginBottom: "10px",
-    border:
-      "1px solid #dfe9ec",
-    boxShadow:
-      "0 9px 28px rgba(20,60,80,.055)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "10px",
-    minWidth: 0,
-  },
-
-  welcomeContent: {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    minWidth: 0,
-    flex: 1,
-  },
-
-  avatar: {
-    width: "48px",
-    height: "48px",
-    minWidth: "48px",
-    borderRadius: "15px",
-    background:
-      "linear-gradient(135deg,#155eef,#16a34a)",
-    color: "#fff",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontWeight: 900,
-    fontSize: "18px",
-    boxShadow:
-      "0 8px 20px rgba(37,99,235,.20)",
-  },
-
-  welcomeText: {
-    minWidth: 0,
-  },
-
-  smallText: {
-    color: "#71808a",
-    margin: "0 0 2px",
-    fontSize: "10px",
-  },
-
-  welcomeTitle: {
-    margin: 0,
-    fontSize: "22px",
-    fontWeight: 850,
-    letterSpacing: "-.5px",
-    overflowWrap: "anywhere",
-  },
-
-  subText: {
-    color: "#71808a",
-    margin: "4px 0 0",
-    fontSize: "9px",
-  },
-
-  welcomeBadge: {
-    background: "#ecfaf5",
-    color: "#16804e",
-    padding: "9px 10px",
-    border: 0,
-    borderRadius: "11px",
-    fontSize: "8px",
-    fontWeight: 850,
-    whiteSpace: "nowrap",
-    cursor: "pointer",
-  },
-
-  auraIdCard: {
-    background:
-      "rgba(255,255,255,.96)",
-    borderRadius: "18px",
-    padding: "11px 13px",
-    marginBottom: "10px",
-    border:
-      "1px solid #dfe9ec",
-    display: "flex",
-    alignItems: "center",
-    gap: "9px",
-    boxShadow:
-      "0 7px 22px rgba(20,60,80,.045)",
-  },
-
-  auraIdIcon: {
-    width: "40px",
-    height: "40px",
-    minWidth: "40px",
-    borderRadius: "12px",
-    background:
-      "linear-gradient(135deg,#155eef,#16a34a)",
-    color: "#fff",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "10px",
-    fontWeight: 900,
-  },
-
-  auraIdContent: {
-    flex: 1,
-    minWidth: 0,
-  },
-
-  auraIdLabel: {
-    display: "block",
-    color: "#9aa6ae",
-    fontSize: "8px",
-    letterSpacing: ".7px",
-    fontWeight: 800,
-  },
-
-  auraIdValue: {
-    display: "block",
-    color: "#111827",
-    fontSize: "15px",
-    marginTop: "2px",
-  },
-
-  auraIdVerified: {
-    padding: "7px 9px",
-    borderRadius: "999px",
-    background: "#ecfdf5",
-    color: "#059669",
-    fontSize: "8px",
-    fontWeight: 850,
-  },
-
-  statsGrid: {
-    display: "grid",
-    gridTemplateColumns:
-      "minmax(0,1.5fr) repeat(2,minmax(0,1fr))",
-    gap: "9px",
-    marginBottom: "20px",
-    width: "100%",
-  },
-
-  walletCard: {
-    background:
-      "linear-gradient(135deg,#123746,#164b59 55%,#166a51)",
-    color: "#fff",
-    padding: "17px",
-    borderRadius: "21px",
-    minHeight: "142px",
-    boxShadow:
-      "0 13px 32px rgba(18,55,70,.17)",
-    position: "relative",
-    overflow: "hidden",
-    minWidth: 0,
-  },
-
-  walletTop: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: "10px",
-  },
-
-  walletLabel: {
-    fontSize: "10px",
-    opacity: .78,
-    marginBottom: "5px",
-  },
-
-  walletAmount: {
-    fontSize: "31px",
-    fontWeight: 900,
-    letterSpacing: "-1px",
-  },
-
-  walletIcon: {
-    width: "46px",
-    height: "46px",
-    minWidth: "46px",
-    borderRadius: "14px",
-    background:
-      "rgba(255,255,255,.14)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "20px",
-  },
-
-  walletBottom: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "8px",
-    marginTop: "18px",
-  },
-
-  walletHint: {
-    fontSize: "9px",
-    opacity: .72,
-  },
-
-  walletButton: {
-    background: "#fff",
-    color: "#123746",
-    border: "none",
-    padding: "9px 12px",
-    borderRadius: "11px",
-    fontWeight: 850,
-    fontSize: "10px",
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  },
-
-  statCard: {
-    background:
-      "rgba(255,255,255,.96)",
-    padding: "15px",
-    borderRadius: "19px",
-    border:
-      "1px solid #e1e9ec",
-    boxShadow:
-      "0 7px 22px rgba(20,60,80,.045)",
-    minHeight: "142px",
-    minWidth: 0,
-  },
-
-  statIcon: {
-    width: "35px",
-    height: "35px",
-    borderRadius: "11px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "16px",
-    marginBottom: "10px",
-  },
-
-  cardLabel: {
-    fontSize: "9px",
-    color: "#71808a",
-    marginBottom: "3px",
-  },
-
-  statAmount: {
-    fontSize: "21px",
-    fontWeight: 850,
-    color: "#111827",
-  },
-
-  cardHint: {
-    fontSize: "8px",
-    color: "#9aa6ae",
-    marginTop: "4px",
-  },
-
-  section: {
-    marginBottom: "22px",
-    minWidth: 0,
-  },
-
-  sectionHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: "10px",
-    gap: "8px",
-  },
-
-  sectionTitle: {
-    margin: 0,
-    fontSize: "17px",
-    fontWeight: 850,
-    letterSpacing: "-.35px",
-  },
-
-  sectionSub: {
-    margin: "4px 0 0",
-    color: "#71808a",
-    fontSize: "9px",
-  },
-
-  actionGrid: {
-    display: "grid",
-    gridTemplateColumns:
-      "repeat(4,minmax(0,1fr))",
-    gap: "8px",
-    width: "100%",
-  },
-
-  actionButton: {
-    background: "#fff",
-    border:
-      "1px solid #e1e9ec",
-    borderRadius: "16px",
-    padding: "11px",
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    textAlign: "left",
-    cursor: "pointer",
-    boxShadow:
-      "0 7px 20px rgba(20,60,80,.04)",
-    minHeight: "70px",
-    minWidth: 0,
-    width: "100%",
-    overflow: "hidden",
-  },
-
-  actionIcon: {
-    width: "36px",
-    height: "36px",
-    minWidth: "36px",
-    borderRadius: "11px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "16px",
-  },
-
-  actionTitle: {
-    display: "block",
-    color: "#111827",
-    fontSize: "10px",
-    marginBottom: "3px",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-
-  actionSub: {
-    display: "block",
-    color: "#94a3b8",
-    fontSize: "8px",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-
-  actionArrow: {
-    marginLeft: "auto",
-    color: "#94a3b8",
-    fontSize: "14px",
-    flexShrink: 0,
-  },
-
-  offerCount: {
-    background: "#ecfdf5",
-    color: "#047857",
-    padding: "6px 9px",
-    borderRadius: "999px",
-    fontSize: "8px",
-    fontWeight: 850,
-    whiteSpace: "nowrap",
-  },
-
-  offerGrid: {
-    display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit,minmax(260px,1fr))",
-    gap: "10px",
-    width: "100%",
-  },
-
-  offerCard: {
-    background: "#fff",
-    borderRadius: "18px",
-    overflow: "hidden",
-    border:
-      "1px solid #e1e9ec",
-    boxShadow:
-      "0 8px 24px rgba(20,60,80,.045)",
-    minWidth: 0,
-  },
-
-  offerImageWrap: {
-    height: "145px",
-    position: "relative",
-    background:
-      "linear-gradient(135deg,#eef7f8,#f4f0ff)",
-    overflow: "hidden",
-  },
-
-  offerImage: {
-    width: "100%",
-    height: "100%",
-    objectFit: "cover",
-    display: "block",
-  },
-
-  offerPlaceholder: {
-    width: "100%",
-    height: "100%",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "40px",
-  },
-
-  offerRewardBadge: {
-    position: "absolute",
-    right: "9px",
-    bottom: "9px",
-    background: "#fff",
-    color: "#059669",
-    padding: "6px 9px",
-    borderRadius: "9px",
-    fontSize: "10px",
-    fontWeight: 900,
-    boxShadow:
-      "0 5px 15px rgba(0,0,0,.10)",
-  },
-
-  offerContent: {
-    padding: "13px",
-    minWidth: 0,
-  },
-
-  offerTop: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "7px",
-  },
-
-  category: {
-    fontSize: "8px",
-    background: "#eff6ff",
-    padding: "5px 7px",
-    borderRadius: "8px",
-    color: "#2563eb",
-    fontWeight: 750,
-    maxWidth: "60%",
-    overflow: "hidden",
-    whiteSpace: "nowrap",
-    textOverflow: "ellipsis",
-  },
-
-  easyBadge: {
-    fontSize: "8px",
-    color: "#059669",
-    fontWeight: 750,
-    whiteSpace: "nowrap",
-  },
-
-  offerName: {
-    margin: "9px 0 5px",
-    fontSize: "15px",
-    fontWeight: 850,
-    color: "#111827",
-    overflowWrap: "anywhere",
-  },
-
-  offerDescription: {
-    color: "#64748b",
-    fontSize: "9px",
-    lineHeight: 1.5,
-    minHeight: "32px",
-    margin: 0,
-  },
-
-  startButton: {
-    width: "100%",
-    marginTop: "10px",
-    border: "none",
-    background:
-      "linear-gradient(90deg,#155eef,#4f46e5)",
-    color: "#fff",
-    padding: "10px",
-    borderRadius: "10px",
-    fontWeight: 850,
-    cursor: "pointer",
-    fontSize: "9px",
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: "8px",
-  },
-
-  emptyBox: {
-    background:
-      "rgba(255,255,255,.92)",
-    borderRadius: "18px",
-    padding: "30px 16px",
-    textAlign: "center",
-    color: "#64748b",
-    border:
-      "1px solid #e1e9ec",
-  },
-
-  emptyIcon: {
-    width: "55px",
-    height: "55px",
-    borderRadius: "17px",
-    background: "#eef2ff",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    margin: "0 auto 10px",
-    fontSize: "24px",
-  },
-
-  emptyTitle: {
-    color: "#111827",
-    margin: "0 0 4px",
-    fontSize: "14px",
-  },
-
-  emptyText: {
-    margin: 0,
-    fontSize: "9px",
-  },
-
-  transactionBox: {
-    background:
-      "rgba(255,255,255,.94)",
-    borderRadius: "18px",
-    overflow: "hidden",
-    border:
-      "1px solid #e1e9ec",
-    width: "100%",
-  },
-
-  transactionRow: {
-    padding: "12px",
-    borderBottom:
-      "1px solid #eef2f4",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: "10px",
-    minWidth: 0,
-  },
-
-  transactionLeft: {
-    display: "flex",
-    alignItems: "center",
-    gap: "9px",
-    minWidth: 0,
-    flex: 1,
-  },
-
-  transactionIcon: {
-    width: "36px",
-    height: "36px",
-    minWidth: "36px",
-    borderRadius: "11px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontWeight: 900,
-  },
-
-  transactionTitle: {
-    display: "block",
-    fontSize: "9px",
-    color: "#111827",
-    textTransform: "capitalize",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    maxWidth: "190px",
-  },
-
-  transactionDate: {
-    fontSize: "8px",
-    color: "#94a3b8",
-    marginTop: "3px",
-  },
-
-  transactionAmount: {
-    fontWeight: 900,
-    fontSize: "10px",
-    whiteSpace: "nowrap",
-    flexShrink: 0,
-  },
-
-  footer: {
-    padding: "18px 3px 4px",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: "12px",
-    color: "#94a3b8",
-    fontSize: "8px",
-  },
-
-  footerBrand: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "3px",
-  },
-};
