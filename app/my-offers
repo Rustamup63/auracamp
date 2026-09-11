@@ -1,0 +1,619 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+  {
+    auth: {
+      flowType: "pkce",
+      persistSession: true,
+      autoRefreshToken: true,
+    },
+  }
+);
+
+type Click = {
+  id: string;
+  click_id: string;
+  campaign_id: string;
+  status: string;
+  created_at: string;
+};
+
+type Conversion = {
+  id: string;
+  conversion_id: string;
+  click_id: string;
+  campaign_id: string;
+  reward: number;
+  advertiser_payout: number;
+  status: string;
+  rejection_reason: string | null;
+  created_at: string;
+};
+
+type Campaign = {
+  id: string;
+  name: string;
+  image_url: string | null;
+  category: string | null;
+  reward: number;
+  landing_url: string | null;
+};
+
+type Activity = {
+  click: Click;
+  conversion?: Conversion;
+  campaign?: Campaign;
+};
+
+type Filter =
+  | "all"
+  | "completed"
+  | "progress"
+  | "cancelled";
+
+export default function MyOffers() {
+  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<Activity[]>([]);
+  const [balance, setBalance] = useState(0);
+  const [filter, setFilter] = useState<Filter>("all");
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function load() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      window.location.replace("/login");
+      return;
+    }
+
+    const [clicks, conversions, campaigns, profile] =
+      await Promise.all([
+        supabase
+          .from("clicks")
+          .select("id,click_id,campaign_id,status,created_at")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false }),
+
+        supabase
+          .from("conversions")
+          .select(
+            "id,conversion_id,click_id,campaign_id,reward,advertiser_payout,status,rejection_reason,created_at"
+          )
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false }),
+
+        supabase
+          .from("campaigns")
+          .select("id,name,image_url,category,reward,landing_url"),
+
+        supabase
+          .from("profiles")
+          .select("wallet_balance")
+          .eq("id", user.id)
+          .maybeSingle(),
+      ]);
+
+    const clickData = clicks.data || [];
+    const conversionData = conversions.data || [];
+    const campaignData = campaigns.data || [];
+
+    const conversionMap = new Map(
+      conversionData.map((x) => [x.click_id, x])
+    );
+
+    const campaignMap = new Map(
+      campaignData.map((x) => [x.id, x])
+    );
+
+    setItems(
+      clickData.map((click) => ({
+        click,
+        conversion: conversionMap.get(click.click_id),
+        campaign: campaignMap.get(click.campaign_id),
+      }))
+    );
+
+    setBalance(Number(profile.data?.wallet_balance || 0));
+    setLoading(false);
+  }
+
+  const completed = items.filter((x) =>
+    ["approved", "completed"].includes(
+      x.conversion?.status || ""
+    )
+  );
+
+  const progress = items.filter((x) =>
+    ["clicked", "pending"].includes(
+      x.conversion?.status || x.click.status
+    )
+  );
+
+  const cancelled = items.filter((x) =>
+    ["rejected", "fraud", "expired"].includes(
+      x.conversion?.status || x.click.status
+    )
+  );
+
+  const filtered = useMemo(() => {
+    if (filter === "completed") return completed;
+    if (filter === "progress") return progress;
+    if (filter === "cancelled") return cancelled;
+    return items;
+  }, [filter, items, completed, progress, cancelled]);
+
+  if (loading) {
+    return (
+      <>
+        <style>{css}</style>
+        <main className="loading">
+          <b>AURA CAMP</b>
+          <span>Loading your offers...</span>
+        </main>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <style>{css}</style>
+
+      <main className="page">
+
+        <header className="top">
+          <button
+            className="back"
+            onClick={() =>
+              (window.location.href = "/")
+            }
+          >
+            ←
+          </button>
+
+          <div>
+            <h1>My Offers</h1>
+            <p>
+              Track your offer progress and earnings
+            </p>
+          </div>
+
+          <button
+            className="search"
+            onClick={() =>
+              document
+                .getElementById("offerSearch")
+                ?.focus()
+            }
+          >
+            ⌕
+          </button>
+        </header>
+
+        <input
+          id="offerSearch"
+          className="searchInput"
+          placeholder="Search your offers..."
+          onChange={(e) => {
+            const value =
+              e.target.value.toLowerCase();
+
+            document
+              .querySelectorAll(".activityCard")
+              .forEach((card) => {
+                const text =
+                  card.textContent?.toLowerCase() || "";
+
+                (card as HTMLElement).style.display =
+                  !value || text.includes(value)
+                    ? ""
+                    : "none";
+              });
+          }}
+        />
+
+        <section className="hero">
+          <div className="heroRow">
+            <span className="tracker">
+              ✓ Offer tracker
+            </span>
+
+            <div className="heroIcon">◴</div>
+          </div>
+
+          <h2>Your offers activity</h2>
+
+          <p>
+            Progress, completions & wallet balance
+          </p>
+
+          <div className="summary">
+            <Box
+              value={items.length}
+              label="Total"
+            />
+
+            <Box
+              value={progress.length}
+              label="Active"
+            />
+
+            <Box
+              value={completed.length}
+              label="Done"
+            />
+
+            <Box
+              value={`₹${balance.toFixed(2)}`}
+              label="Balance"
+              purple
+            />
+          </div>
+        </section>
+
+        <div className="filters">
+          <Filter
+            active={filter === "all"}
+            label="All"
+            count={items.length}
+            onClick={() => setFilter("all")}
+          />
+
+          <Filter
+            active={filter === "completed"}
+            label="Completed"
+            count={completed.length}
+            onClick={() => setFilter("completed")}
+          />
+
+          <Filter
+            active={filter === "progress"}
+            label="In Progress"
+            count={progress.length}
+            onClick={() => setFilter("progress")}
+          />
+
+          <Filter
+            active={filter === "cancelled"}
+            label="Cancelled"
+            count={cancelled.length}
+            onClick={() => setFilter("cancelled")}
+          />
+        </div>
+
+        <div className="info">
+          ⚡ Rewards are credited to your wallet after
+          verification.
+        </div>
+
+        <section className="list">
+          {filtered.length === 0 ? (
+            <div className="empty">
+              <div>🎁</div>
+              <h3>No offer activity</h3>
+              <p>
+                Your offer activity will appear here.
+              </p>
+            </div>
+          ) : (
+            filtered.map((item) => (
+              <OfferCard
+                key={item.click.id}
+                item={item}
+              />
+            ))
+          )}
+        </section>
+
+        <nav className="bottom">
+          <button
+            onClick={() =>
+              (window.location.href = "/")
+            }
+          >
+            <span>⌂</span>
+            <small>Home</small>
+          </button>
+
+          <button
+            onClick={() =>
+              (window.location.href = "/#offers")
+            }
+          >
+            <span>▦</span>
+            <small>Offers</small>
+          </button>
+
+          <button
+            className="telegram"
+            onClick={() =>
+              (window.location.href =
+                "https://t.me/Auracampaign")
+            }
+          >
+            <span>✈</span>
+            <small>Telegram</small>
+          </button>
+
+          <button className="active">
+            <span>▤</span>
+            <small>My Offers</small>
+          </button>
+
+          <button
+            onClick={() =>
+              (window.location.href = "/profile")
+            }
+          >
+            <span>♙</span>
+            <small>Profile</small>
+          </button>
+        </nav>
+
+      </main>
+    </>
+  );
+}
+
+function Box({
+  value,
+  label,
+  purple,
+}: {
+  value: string | number;
+  label: string;
+  purple?: boolean;
+}) {
+  return (
+    <div>
+      <strong className={purple ? "purple" : ""}>
+        {value}
+      </strong>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function Filter({
+  active,
+  label,
+  count,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={active ? "filter active" : "filter"}
+      onClick={onClick}
+    >
+      {label}
+      <span>{count}</span>
+    </button>
+  );
+}
+
+function OfferCard({
+  item,
+}: {
+  item: Activity;
+}) {
+  const campaign = item.campaign;
+  const conversion = item.conversion;
+
+  const status =
+    conversion?.status || item.click.status;
+
+  const completed =
+    status === "approved" ||
+    status === "completed";
+
+  const cancelled =
+    status === "rejected" ||
+    status === "fraud" ||
+    status === "expired";
+
+  const reward = Number(
+    conversion?.reward ??
+      campaign?.reward ??
+      0
+  );
+
+  return (
+    <article className="activityCard">
+
+      <div className="offerHead">
+
+        <div className="offerImage">
+          {campaign?.image_url ? (
+            <img
+              src={campaign.image_url}
+              alt={campaign.name}
+            />
+          ) : (
+            <span>🎁</span>
+          )}
+        </div>
+
+        <div className="offerTitle">
+          <h3>
+            {campaign?.name ||
+              "Partner Offer"}
+          </h3>
+
+          <span>
+            ◷ Clicked ·{" "}
+            {formatDateTime(
+              item.click.created_at
+            )}
+          </span>
+
+          <span>
+            ◇{" "}
+            {campaign?.category ||
+              "Partner offer"}
+          </span>
+        </div>
+
+        <Status status={status} />
+      </div>
+
+      <div className="progressBox">
+
+        <div className="progressTop">
+          <strong>⛓ Step progress</strong>
+
+          <span>
+            {completed
+              ? "Completed"
+              : cancelled
+              ? "Cancelled"
+              : "Step 1 of 2"}
+          </span>
+        </div>
+
+        <div className="progressLine">
+
+          <i className="done">✓</i>
+
+          <div className="line">
+            <span
+              className={
+                completed ? "full" : ""
+              }
+            />
+          </div>
+
+          <i
+            className={
+              completed
+                ? "done"
+                : cancelled
+                ? "cancel"
+                : ""
+            }
+          >
+            {completed
+              ? "✓"
+              : cancelled
+              ? "×"
+              : "2"}
+          </i>
+
+        </div>
+
+      </div>
+
+      <div className="offerFooter">
+
+        <strong className="reward">
+          +₹{reward.toFixed(2)}
+          <small> C</small>
+        </strong>
+
+        {completed ? (
+          <span className="credited">
+            Reward credited ✓
+          </span>
+        ) : campaign?.landing_url ? (
+          <button
+            onClick={() =>
+              (window.location.href =
+                campaign.landing_url!)
+            }
+          >
+            View offer →
+          </button>
+        ) : null}
+
+      </div>
+
+      {conversion?.rejection_reason && (
+        <div className="reason">
+          Reason: {conversion.rejection_reason}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function Status({
+  status,
+}: {
+  status: string;
+}) {
+  const s = status.toLowerCase();
+
+  if (
+    s === "approved" ||
+    s === "completed"
+  ) {
+    return (
+      <span className="status completed">
+        Completed
+      </span>
+    );
+  }
+
+  if (
+    s === "rejected" ||
+    s === "fraud" ||
+    s === "expired"
+  ) {
+    return (
+      <span className="status cancelled">
+        Cancelled
+      </span>
+    );
+  }
+
+  return (
+    <span className="status progress">
+      In Progress
+    </span>
+  );
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString(
+    "en-IN",
+    {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    }
+  );
+}
+
+const css = `
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;overflow-x:hidden}
+body{background:#f4f8ff;font-family:Inter,system-ui,sans-serif;color:#111827}
+button{font:inherit;-webkit-tap-highlight-color:transparent}
+.page{min-height:100vh;max-width:540px;margin:auto;padding:10px 10px 105px;background:linear-gradient(145deg,#f4f8ff,#fbfbff)}
+.top{display:grid;grid-template-columns:50px 1fr 50px;gap:9px;align-items:center;margin-bottom:9px}.top button{width:50px;height:50px;border:1px solid #e1e8ef;border-radius:15px;background:#fff;font-size:24px}.top h1{margin:0;font-size:22px}.top p{margin:3px 0 0;color:#7d8792;font-size:10px}
+.searchInput{display:none;width:100%;margin-bottom:9px;padding:11px 13px;border:1px solid #e1e8ef;border-radius:13px;background:#fff;outline:none;font-size:10px}.searchInput:focus{border-color:#8a55dd}
+.hero{padding:17px;border-radius:23px;background:linear-gradient(135deg,#f1ebff,#e7efff);border:1px solid #e0e4fa}.heroRow{display:flex;align-items:center;justify-content:space-between}.tracker{padding:7px 10px;border-radius:999px;color:#7335c9;background:#fff;font-size:10px;font-weight:850}.heroIcon{width:48px;height:48px;border-radius:15px;display:flex;align-items:center;justify-content:center;color:#2563eb;background:#fff;font-size:22px}.hero h2{margin:12px 0 5px;font-size:21px}.hero p{margin:0;color:#748091;font-size:12px}.summary{display:grid;grid-template-columns:repeat(4,1fr);margin-top:16px;padding:12px 4px;border-radius:20px;background:rgba(255,255,255,.9)}.summary>div{text-align:center;border-right:1px solid #e7e9ef}.summary>div:last-child{border:0}.summary strong{display:block;font-size:20px}.summary span{display:block;margin-top:4px;color:#737b88;font-size:9px;font-weight:700}.summary .purple{color:#6d28d9;font-size:16px}
+.filters{display:flex;gap:7px;overflow-x:auto;padding:12px 0;scrollbar-width:none}.filters::-webkit-scrollbar{display:none}.filter{flex-shrink:0;padding:11px 14px;border:1px solid #e4e8ed;border-radius:999px;background:#fff;font-size:10px;font-weight:800}.filter span{margin-left:5px;padding:4px 7px;border-radius:999px;color:#7335c9;background:#f0e8ff}.filter.active{color:#fff;background:#6d12cf;border-color:#6d12cf}.filter.active span{color:#fff;background:rgba(255,255,255,.2)}
+.info{margin-bottom:12px;padding:12px;border:1px solid #e6e9ef;border-radius:16px;background:#fff;color:#727c87;font-size:10px}
+.list{display:flex;flex-direction:column;gap:12px}.activityCard{padding:13px;border:1px solid #e5e9ef;border-radius:20px;background:#fff;box-shadow:0 8px 25px rgba(25,45,70,.05)}.offerHead{position:relative;display:flex;gap:10px}.offerImage{width:76px;height:76px;min-width:76px;border-radius:15px;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#eef2ff;font-size:28px}.offerImage img{width:100%;height:100%;object-fit:cover}.offerTitle{min-width:0;padding-right:65px}.offerTitle h3{margin:4px 0 7px;font-size:15px}.offerTitle span{display:block;width:max-content;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:5px;padding:5px 7px;border-radius:999px;background:#f8fafc;color:#737d88;font-size:8px}.status{position:absolute;top:0;right:0;padding:6px 8px;border-radius:999px;font-size:8px;font-weight:850}.completed{color:#047857;background:#ecfdf5}.cancelled{color:#dc2626;background:#fef2f2}.progress{color:#a16207;background:#fef9c3}
+.progressBox{margin-top:12px;padding:12px;border-radius:16px;background:linear-gradient(135deg,#faf8ff,#f7f9ff);border:1px solid #ece8f8}.progressTop{display:flex;justify-content:space-between;gap:7px;color:#6d28a8;font-size:10px}.progressTop span{color:#68717e}.progressLine{display:flex;align-items:center;margin-top:11px}.progressLine i{width:25px;height:25px;min-width:25px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#e7edf1;color:#71808a;font-style:normal;font-size:10px;font-weight:900}.progressLine i.done{color:#fff;background:#16a36a}.progressLine i.cancel{color:#fff;background:#dc2626}.line{flex:1;height:5px;margin:0 5px;border-radius:99px;background:#dce8e4;overflow:hidden}.line span{display:block;width:50%;height:100%;border-radius:99px;background:#7ee1b1}.line span.full{width:100%}
+.offerFooter{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px;padding:10px;border:1px solid #e5f2eb;border-radius:15px}.reward{padding:7px 10px;border-radius:10px;color:#168b59;background:#effcf5;font-size:14px}.reward small{color:#d39b00;font-size:8px}.offerFooter button{border:0;background:transparent;color:#6d28d9;font-size:11px;font-weight:850}.credited{color:#059669;font-size:9px;font-weight:800}.reason{margin-top:8px;padding:8px;border-radius:9px;color:#b42318;background:#fff5f4;font-size:8px}
+.empty{padding:40px 15px;text-align:center;border-radius:18px;background:#fff;border:1px solid #e5e9ef}.empty div{font-size:35px}.empty h3{margin:9px 0 4px;font-size:15px}.empty p{margin:0;color:#89929d;font-size:9px}
+.bottom{position:fixed;left:8px;right:8px;bottom:max(8px,env(safe-area-inset-bottom));z-index:99;height:72px;display:grid;grid-template-columns:repeat(5,1fr);padding:4px;border-radius:22px;background:rgba(255,255,255,.97);border:1px solid #e0e9ec;box-shadow:0 15px 40px rgba(15,40,55,.15);backdrop-filter:blur(18px)}.bottom button{border:0;background:transparent;color:#7c8790;font-size:20px}.bottom small{display:block;margin-top:2px;font-size:7px}.bottom .active{color:#6d28d9}.bottom .telegram{width:58px;height:58px;margin-top:-20px;align-self:start;justify-self:center;border-radius:50%;color:#fff;background:linear-gradient(145deg,#155eef,#16a34a);border:4px solid #fff;box-shadow:0 9px 25px rgba(21,94,239,.28)}
+.loading{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:#7d8792}.loading b{font-size:22px;color:#16a34a}.loading span{font-size:9px}
+@media(min-width:801px){.bottom{width:524px;left:50%;right:auto;transform:translateX(-50%)}}
+`;
