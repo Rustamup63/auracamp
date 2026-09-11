@@ -15,6 +15,8 @@ const supabase = createClient(
   }
 );
 
+const TELEGRAM_URL = "https://t.me/Auracampaign";
+
 type Profile = {
   user_code: string | null;
   full_name: string | null;
@@ -66,7 +68,7 @@ export default function Home() {
   useEffect(() => {
     let mounted = true;
 
-    async function init() {
+    async function loadDashboard() {
       try {
         const {
           data: { user },
@@ -89,64 +91,119 @@ export default function Home() {
           return;
         }
 
-        const [profileRes, campaignRes, transactionRes, withdrawalRes] =
-          await Promise.all([
-            supabase
-              .from("profiles")
-              .select(
-                "user_code, full_name, email, wallet_balance, pending_balance, total_earned, total_withdrawn"
-              )
-              .eq("id", user.id)
-              .maybeSingle(),
+        const [
+          profileResult,
+          campaignsResult,
+          transactionsResult,
+          withdrawalsResult,
+        ] = await Promise.all([
+          supabase
+            .from("profiles")
+            .select(
+              `
+              user_code,
+              full_name,
+              email,
+              wallet_balance,
+              pending_balance,
+              total_earned,
+              total_withdrawn
+            `
+            )
+            .eq("id", user.id)
+            .maybeSingle(),
 
-            supabase
-              .from("campaigns")
-              .select(
-                "id, name, description, category, reward, conversion_type, terms, image_url, landing_url"
-              )
-              .eq("status", "active")
-              .order("created_at", { ascending: false }),
+          supabase
+            .from("campaigns")
+            .select(
+              `
+              id,
+              name,
+              description,
+              category,
+              reward,
+              conversion_type,
+              terms,
+              image_url,
+              landing_url
+            `
+            )
+            .eq("status", "active")
+            .order("created_at", {
+              ascending: false,
+            }),
 
-            supabase
-              .from("wallet_transactions")
-              .select("id, type, amount, description, created_at")
-              .eq("user_id", user.id)
-              .order("created_at", { ascending: false })
-              .limit(5),
+          supabase
+            .from("wallet_transactions")
+            .select(
+              `
+              id,
+              type,
+              amount,
+              description,
+              created_at
+            `
+            )
+            .eq("user_id", user.id)
+            .order("created_at", {
+              ascending: false,
+            })
+            .limit(5),
 
-            supabase
-              .from("withdrawals")
-              .select("id, amount, method, status, created_at")
-              .eq("user_id", user.id)
-              .order("created_at", { ascending: false })
-              .limit(5),
-          ]);
+          supabase
+            .from("withdrawals")
+            .select(
+              `
+              id,
+              amount,
+              method,
+              status,
+              created_at
+            `
+            )
+            .eq("user_id", user.id)
+            .order("created_at", {
+              ascending: false,
+            })
+            .limit(5),
+        ]);
 
         if (!mounted) return;
 
-        if (profileRes.data) {
-          setProfile(profileRes.data);
+        if (profileResult.data) {
+          setProfile(profileResult.data);
 
           setUserName(
-            profileRes.data.full_name ||
+            profileResult.data.full_name ||
               user.email?.split("@")[0] ||
               "User"
           );
         } else {
-          setUserName(user.email?.split("@")[0] || "User");
+          setUserName(
+            user.email?.split("@")[0] || "User"
+          );
         }
 
-        setCampaigns(campaignRes.data || []);
-        setTransactions(transactionRes.data || []);
-        setWithdrawals(withdrawalRes.data || []);
+        setCampaigns(campaignsResult.data || []);
+        setTransactions(
+          transactionsResult.data || []
+        );
+        setWithdrawals(
+          withdrawalsResult.data || []
+        );
       } catch (error) {
-        console.error("Dashboard error:", error);
+        console.error(
+          "Dashboard loading error:",
+          error
+        );
       } finally {
-        if (mounted) setLoading(false);
+        if (mounted) {
+          setLoading(false);
+        }
       }
     }
 
-    init();
+    loadDashboard();
 
     return () => {
       mounted = false;
@@ -154,23 +211,33 @@ export default function Home() {
   }, []);
 
   /*
-   * REAL-TIME WALLET + WITHDRAWAL UPDATE
+   * REALTIME USER DATA
+   *
+   * Profile:
+   * - balance
+   * - pending balance
+   * - total earned
+   *
+   * Withdrawal:
+   * - pending
+   * - approved/paid
+   * - rejected
    */
   useEffect(() => {
-    let userId: string | null = null;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let channel:
+      | ReturnType<typeof supabase.channel>
+      | null = null;
 
-    async function subscribe() {
+    async function setupRealtime() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
       if (!user) return;
 
-      userId = user.id;
-
       channel = supabase
-        .channel(`user-dashboard-${user.id}`)
+        .channel(`auracamp-dashboard-${user.id}`)
+
         .on(
           "postgres_changes",
           {
@@ -183,17 +250,31 @@ export default function Home() {
             const { data } = await supabase
               .from("profiles")
               .select(
-                "user_code, full_name, email, wallet_balance, pending_balance, total_earned, total_withdrawn"
+                `
+                user_code,
+                full_name,
+                email,
+                wallet_balance,
+                pending_balance,
+                total_earned,
+                total_withdrawn
+                `
               )
               .eq("id", user.id)
               .maybeSingle();
 
             if (data) {
               setProfile(data);
-              setUserName(data.full_name || user.email?.split("@")[0] || "User");
+
+              setUserName(
+                data.full_name ||
+                  user.email?.split("@")[0] ||
+                  "User"
+              );
             }
           }
         )
+
         .on(
           "postgres_changes",
           {
@@ -205,31 +286,46 @@ export default function Home() {
           async () => {
             const { data } = await supabase
               .from("withdrawals")
-              .select("id, amount, method, status, created_at")
+              .select(
+                `
+                id,
+                amount,
+                method,
+                status,
+                created_at
+                `
+              )
               .eq("user_id", user.id)
-              .order("created_at", { ascending: false })
+              .order("created_at", {
+                ascending: false,
+              })
               .limit(5);
 
             setWithdrawals(data || []);
           }
         )
+
         .subscribe();
     }
 
-    subscribe();
+    setupRealtime();
 
     return () => {
-      if (channel) supabase.removeChannel(channel);
-      userId = null;
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
     };
   }, []);
 
   async function logout() {
     await supabase.auth.signOut();
+
     window.location.replace("/login");
   }
 
-  async function startOffer(campaign: Campaign) {
+  async function startOffer(
+    campaign: Campaign
+  ) {
     if (startingOffer) return;
 
     setMessage("");
@@ -247,27 +343,41 @@ export default function Home() {
       }
 
       if (!campaign.landing_url) {
-        setMessage("This offer is temporarily unavailable.");
+        setMessage(
+          "This offer is temporarily unavailable."
+        );
         return;
       }
 
       const clickId = crypto.randomUUID();
 
-      const { error } = await supabase.from("clicks").insert({
-        user_id: user.id,
-        campaign_id: campaign.id,
-        click_id: clickId,
-        status: "clicked",
-        user_agent: navigator.userAgent,
-      });
+      const { error } = await supabase
+        .from("clicks")
+        .insert({
+          user_id: user.id,
+          campaign_id: campaign.id,
+          click_id: clickId,
+          status: "clicked",
+          user_agent: navigator.userAgent,
+        });
 
       if (error) {
-        console.error("Click tracking error:", error);
-        setMessage("Unable to start this offer. Please try again.");
+        console.error(
+          "Click tracking error:",
+          error
+        );
+
+        setMessage(
+          "Unable to start this offer. Please try again."
+        );
+
         return;
       }
 
-      const separator = campaign.landing_url.includes("?") ? "&" : "?";
+      const separator =
+        campaign.landing_url.includes("?")
+          ? "&"
+          : "?";
 
       const trackingUrl =
         `${campaign.landing_url}${separator}` +
@@ -275,8 +385,14 @@ export default function Home() {
 
       window.location.href = trackingUrl;
     } catch (error) {
-      console.error("Start offer error:", error);
-      setMessage("Something went wrong. Please try again.");
+      console.error(
+        "Offer start error:",
+        error
+      );
+
+      setMessage(
+        "Something went wrong. Please try again."
+      );
     } finally {
       setStartingOffer(null);
     }
@@ -285,55 +401,77 @@ export default function Home() {
   if (loading) {
     return (
       <>
-        <style>{globalStyles}</style>
+        <style>{styles}</style>
 
-        <main className="loadingPage">
+        <main className="loadingScreen">
           <div className="loadingCard">
-            <div className="loadingLogo">
-              <span>AURA</span> <b>CAMP</b>
+            <div className="loadingBrand">
+              <span>AURA</span>{" "}
+              <b>CAMP</b>
             </div>
 
             <div className="loader" />
 
-            <p>Loading your dashboard...</p>
+            <p>
+              Loading your dashboard...
+            </p>
           </div>
         </main>
       </>
     );
   }
 
-  const wallet = Number(profile?.wallet_balance || 0);
-  const pending = Number(profile?.pending_balance || 0);
-  const earned = Number(profile?.total_earned || 0);
+  const wallet = Number(
+    profile?.wallet_balance || 0
+  );
+
+  const pending = Number(
+    profile?.pending_balance || 0
+  );
+
+  const earned = Number(
+    profile?.total_earned || 0
+  );
+
+  const latestWithdrawal =
+    withdrawals[0] || null;
 
   return (
     <>
-      <style>{globalStyles}</style>
+      <style>{styles}</style>
 
       <main className="page">
-        <div className="glow glowOne" />
-        <div className="glow glowTwo" />
+
+        <div className="backgroundGlow glow1" />
+        <div className="backgroundGlow glow2" />
 
         <div className="container">
+
           {/* HEADER */}
 
-          <header className="header animateDown">
+          <header className="header fadeDown">
+
             <div className="brandArea">
+
               <div className="brand">
-                <span>AURA</span> <b>CAMP</b>
+                <span>AURA</span>{" "}
+                <b>CAMP</b>
               </div>
 
               <div className="tagline">
                 Earn • Explore • Grow
               </div>
+
             </div>
 
-            <div className="headerRight">
+            <div className="headerActions">
+
               <button
-                className="iconButton"
+                className="notificationButton"
                 aria-label="Notifications"
                 onClick={() => {
-                  window.location.href = "/notifications";
+                  window.location.href =
+                    "/notifications";
                 }}
               >
                 🔔
@@ -345,187 +483,253 @@ export default function Home() {
               >
                 Logout
               </button>
+
             </div>
+
           </header>
 
           {/* WELCOME */}
 
-          <section className="welcomeCard animateUp delay1">
-            <div className="welcomeContent">
+          <section className="welcomeCard fadeUp delay1">
+
+            <div className="welcomeLeft">
+
               <div className="avatar">
-                {userName.charAt(0).toUpperCase()}
+                {userName
+                  .charAt(0)
+                  .toUpperCase()}
               </div>
 
               <div className="welcomeText">
-                <p className="smallText">
+
+                <div className="welcomeSmall">
                   Welcome back 👋
+                </div>
+
+                <h1>
+                  {userName}
+                </h1>
+
+                <p>
+                  Complete offers and grow
+                  your earnings.
                 </p>
 
-                <h1>{userName}</h1>
-
-                <p className="subText">
-                  Complete offers and grow your earnings.
-                </p>
               </div>
+
             </div>
 
-            <div className="welcomeBadge">
+            <button
+              className="earningBadge"
+              onClick={() =>
+                document
+                  .getElementById("offers")
+                  ?.scrollIntoView({
+                    behavior: "smooth",
+                  })
+              }
+            >
               ✨ Start Earning
-            </div>
+            </button>
+
           </section>
 
-          {/* AURA CAMP ID */}
+          {/* USER ID */}
 
-          <section className="idCard animateUp delay2">
-            <div className="idIcon">
+          <section className="userIdCard fadeUp delay2">
+
+            <div className="userIdIcon">
               AC
             </div>
 
-            <div className="idContent">
-              <span>AURA CAMP ID</span>
+            <div className="userIdText">
+
+              <span>
+                AURA CAMP ID
+              </span>
 
               <strong>
-                {profile?.user_code || "AC----"}
+                {profile?.user_code ||
+                  "AC----"}
               </strong>
+
             </div>
 
-            <div className="verified">
+            <div className="verifiedBadge">
               ✓ Verified
             </div>
+
           </section>
 
-          {/* WALLET */}
+          {/* BALANCE */}
 
-          <section className="statsGrid animateUp delay2">
-            <div className="walletCard">
-              <div className="walletTop">
+          <section className="balanceGrid fadeUp delay2">
+
+            <div className="balanceCard">
+
+              <div className="balanceTop">
+
                 <div>
-                  <div className="walletLabel">
-                    Available Balance
-                  </div>
 
-                  <div className="walletAmount">
+                  <span className="balanceLabel">
+                    Available Balance
+                  </span>
+
+                  <strong className="balanceAmount">
                     ₹{wallet.toFixed(2)}
-                  </div>
+                  </strong>
+
                 </div>
 
-                <div className="walletIcon">
+                <div className="balanceIcon">
                   💳
                 </div>
+
               </div>
 
-              <div className="walletBottom">
+              <div className="balanceBottom">
+
                 <span>
                   Ready to withdraw
                 </span>
 
                 <button
                   onClick={() => {
-                    window.location.href = "/withdraw";
+                    window.location.href =
+                      "/withdraw";
                   }}
                 >
                   + Withdraw
                 </button>
+
               </div>
+
             </div>
 
-            <div className="statCard">
-              <div className="statIcon pendingIcon">
+            <div className="miniStat">
+
+              <div className="miniIcon purple">
                 ◷
               </div>
 
-              <div className="cardLabel">
+              <span>
                 Pending Rewards
-              </div>
+              </span>
 
-              <div className="statAmount">
+              <strong>
                 ₹{pending.toFixed(2)}
-              </div>
+              </strong>
 
-              <div className="cardHint">
+              <small>
                 Under verification
-              </div>
+              </small>
+
             </div>
 
-            <div className="statCard">
-              <div className="statIcon earnedIcon">
+            <div className="miniStat">
+
+              <div className="miniIcon orange">
                 🏆
               </div>
 
-              <div className="cardLabel">
+              <span>
                 Total Earned
-              </div>
+              </span>
 
-              <div className="statAmount">
+              <strong>
                 ₹{earned.toFixed(2)}
-              </div>
+              </strong>
 
-              <div className="cardHint">
+              <small>
                 Lifetime earnings
-              </div>
+              </small>
+
             </div>
+
           </section>
 
-          {/* WITHDRAWAL STATUS */}
+          {/* WITHDRAWAL */}
 
-          {withdrawals.length > 0 && (
-            <section className="section animateUp delay2">
-              <div className="sectionHeader">
+          {latestWithdrawal && (
+            <section className="section fadeUp">
+
+              <div className="sectionTitle">
+
                 <div>
-                  <h2>Latest Withdrawal</h2>
+                  <h2>
+                    Latest Withdrawal
+                  </h2>
 
                   <p>
-                    Your withdrawal status updates automatically.
+                    Status updates automatically.
                   </p>
                 </div>
+
               </div>
 
               <div className="withdrawalCard">
+
                 <div className="withdrawalLeft">
+
                   <div className="withdrawalIcon">
                     ₹
                   </div>
 
                   <div>
+
                     <strong>
-                      ₹{Number(withdrawals[0].amount).toFixed(2)}
+                      ₹
+                      {Number(
+                        latestWithdrawal.amount
+                      ).toFixed(2)}
                     </strong>
 
                     <span>
-                      {new Date(
-                        withdrawals[0].created_at
-                      ).toLocaleDateString("en-IN", {
-                        day: "2-digit",
-                        month: "short",
-                        year: "numeric",
-                      })}
+                      {formatDate(
+                        latestWithdrawal.created_at
+                      )}
                     </span>
+
                   </div>
+
                 </div>
 
                 <WithdrawalStatus
-                  status={withdrawals[0].status}
+                  status={
+                    latestWithdrawal.status
+                  }
                 />
+
               </div>
+
             </section>
           )}
 
           {/* QUICK ACTIONS */}
 
-          <section className="section animateUp delay3">
-            <div className="sectionHeader">
+          <section className="section fadeUp">
+
+            <div className="sectionTitle">
+
               <div>
-                <h2>Quick Actions</h2>
+                <h2>
+                  Quick Actions
+                </h2>
 
                 <p>
                   Everything you need in one place.
                 </p>
               </div>
+
             </div>
 
-            <div className="actionGrid">
-              <button
-                className="actionCard"
+            <div className="quickGrid">
+
+              <QuickAction
+                icon="🎁"
+                title="Earn Rewards"
+                subtitle="Explore & Earn"
+                className="red"
                 onClick={() =>
                   document
                     .getElementById("offers")
@@ -533,87 +737,47 @@ export default function Home() {
                       behavior: "smooth",
                     })
                 }
-              >
-                <div className="actionIcon red">
-                  🎁
-                </div>
+              />
 
-                <div className="actionText">
-                  <strong>Earn Rewards</strong>
-                  <span>Explore & Earn</span>
-                </div>
-
-                <span className="arrow">
-                  →
-                </span>
-              </button>
-
-              <button
-                className="actionCard"
+              <QuickAction
+                icon="💸"
+                title="Withdraw"
+                subtitle="Get Your Money"
+                className="green"
                 onClick={() => {
-                  window.location.href = "/withdraw";
+                  window.location.href =
+                    "/withdraw";
                 }}
-              >
-                <div className="actionIcon green">
-                  💸
-                </div>
+              />
 
-                <div className="actionText">
-                  <strong>Withdraw</strong>
-                  <span>Get Your Money</span>
-                </div>
-
-                <span className="arrow">
-                  →
-                </span>
-              </button>
-
-              <button
-                className="actionCard"
+              <QuickAction
+                icon="👥"
+                title="Refer & Earn"
+                subtitle="Invite & Earn"
+                className="pink"
                 onClick={() => {
-                  window.location.href = "/referrals";
+                  window.location.href =
+                    "/referrals";
                 }}
-              >
-                <div className="actionIcon pink">
-                  👥
-                </div>
+              />
 
-                <div className="actionText">
-                  <strong>Refer & Earn</strong>
-                  <span>Invite & Earn</span>
-                </div>
-
-                <span className="arrow">
-                  →
-                </span>
-              </button>
-
-              <button
-                className="actionCard"
+              <QuickAction
+                icon="🎧"
+                title="Support"
+                subtitle="Need Help?"
+                className="blue"
                 onClick={() => {
-                  window.location.href = "/support";
+                  window.location.href =
+                    "/support";
                 }}
-              >
-                <div className="actionIcon blue">
-                  🎧
-                </div>
+              />
 
-                <div className="actionText">
-                  <strong>Support</strong>
-                  <span>Need Help?</span>
-                </div>
-
-                <span className="arrow">
-                  →
-                </span>
-              </button>
             </div>
+
           </section>
 
-          {/* MESSAGE */}
-
           {message && (
-            <div className="messageBox">
+            <div className="errorMessage">
               {message}
             </div>
           )}
@@ -622,24 +786,31 @@ export default function Home() {
 
           <section
             id="offers"
-            className="section animateUp delay4"
+            className="section fadeUp"
           >
-            <div className="sectionHeader">
+
+            <div className="sectionTitle">
+
               <div>
-                <h2>Available Offers</h2>
+                <h2>
+                  Available Offers
+                </h2>
 
                 <p>
-                  Complete offers and earn real rewards.
+                  Complete offers and earn real
+                  rewards.
                 </p>
               </div>
 
               <span className="offerCount">
                 {campaigns.length} Offers
               </span>
+
             </div>
 
             {campaigns.length === 0 ? (
-              <div className="emptyBox">
+              <div className="emptyState">
+
                 <div className="emptyIcon">
                   🎁
                 </div>
@@ -649,87 +820,115 @@ export default function Home() {
                 </h3>
 
                 <p>
-                  New earning opportunities will appear here.
+                  New earning opportunities
+                  will appear here.
                 </p>
+
               </div>
             ) : (
               <div className="offerGrid">
-                {campaigns.map((campaign) => (
-                  <article
-                    key={campaign.id}
-                    className="offerCard"
-                  >
-                    <div className="offerImage">
-                      {campaign.image_url ? (
-                        <img
-                          src={campaign.image_url}
-                          alt={campaign.name}
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="placeholder">
-                          🎁
+
+                {campaigns.map(
+                  (campaign) => (
+                    <article
+                      className="offerCard"
+                      key={campaign.id}
+                    >
+
+                      <div className="offerImage">
+
+                        {campaign.image_url ? (
+                          <img
+                            src={
+                              campaign.image_url
+                            }
+                            alt={
+                              campaign.name
+                            }
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="offerPlaceholder">
+                            🎁
+                          </div>
+                        )}
+
+                        <span className="rewardBadge">
+                          +₹
+                          {Number(
+                            campaign.reward
+                          ).toFixed(2)}
+                        </span>
+
+                      </div>
+
+                      <div className="offerBody">
+
+                        <div className="offerMeta">
+
+                          <span className="category">
+                            {campaign.category ||
+                              "Offer"}
+                          </span>
+
+                          <span className="available">
+                            ✓ Available
+                          </span>
+
                         </div>
-                      )}
 
-                      <div className="rewardBadge">
-                        +₹
-                        {Number(
-                          campaign.reward
-                        ).toFixed(2)}
+                        <h3>
+                          {campaign.name}
+                        </h3>
+
+                        <p>
+                          {campaign.description ||
+                            "Complete this offer and earn your reward."}
+                        </p>
+
+                        <button
+                          className="startOffer"
+                          disabled={
+                            startingOffer ===
+                            campaign.id
+                          }
+                          onClick={() =>
+                            startOffer(
+                              campaign
+                            )
+                          }
+                        >
+                          {startingOffer ===
+                          campaign.id
+                            ? "Starting..."
+                            : "Start Offer"}
+
+                          <span>
+                            →
+                          </span>
+                        </button>
+
                       </div>
-                    </div>
 
-                    <div className="offerContent">
-                      <div className="offerTop">
-                        <span className="category">
-                          {campaign.category || "Offer"}
-                        </span>
+                    </article>
+                  )
+                )}
 
-                        <span className="available">
-                          ✓ Available
-                        </span>
-                      </div>
-
-                      <h3>
-                        {campaign.name}
-                      </h3>
-
-                      <p>
-                        {campaign.description ||
-                          "Complete this offer and earn your reward."}
-                      </p>
-
-                      <button
-                        className="startButton"
-                        disabled={
-                          startingOffer === campaign.id
-                        }
-                        onClick={() =>
-                          startOffer(campaign)
-                        }
-                      >
-                        {startingOffer === campaign.id
-                          ? "Starting..."
-                          : "Start Offer"}
-
-                        <span>
-                          →
-                        </span>
-                      </button>
-                    </div>
-                  </article>
-                ))}
               </div>
             )}
+
           </section>
 
-          {/* RECENT ACTIVITY */}
+          {/* TRANSACTIONS */}
 
-          <section className="section animateUp delay5">
-            <div className="sectionHeader">
+          <section className="section fadeUp">
+
+            <div className="sectionTitle">
+
               <div>
-                <h2>Recent Activity</h2>
+                <h2>
+                  Recent Activity
+                </h2>
 
                 <p>
                   Your latest wallet transactions.
@@ -740,16 +939,19 @@ export default function Home() {
                 <button
                   className="viewAll"
                   onClick={() => {
-                    window.location.href = "/transactions";
+                    window.location.href =
+                      "/transactions";
                   }}
                 >
                   View All →
                 </button>
               )}
+
             </div>
 
             {transactions.length === 0 ? (
-              <div className="emptyBox">
+              <div className="emptyState">
+
                 <div className="emptyIcon">
                   📊
                 </div>
@@ -759,74 +961,86 @@ export default function Home() {
                 </h3>
 
                 <p>
-                  Your earnings will appear here after completing offers.
+                  Your earnings will appear
+                  here after completing offers.
                 </p>
+
               </div>
             ) : (
-              <div className="transactionBox">
-                {transactions.map((transaction) => (
-                  <div
-                    className="transactionRow"
-                    key={transaction.id}
-                  >
-                    <div className="transactionLeft">
-                      <div className="transactionIcon">
-                        {transaction.amount >= 0
-                          ? "↗"
-                          : "↘"}
-                      </div>
+              <div className="transactions">
 
-                      <div className="transactionInfo">
-                        <strong>
-                          {transaction.description ||
-                            transaction.type.replaceAll(
-                              "_",
-                              " "
-                            )}
-                        </strong>
-
-                        <span>
-                          {new Date(
-                            transaction.created_at
-                          ).toLocaleDateString(
-                            "en-IN",
-                            {
-                              day: "2-digit",
-                              month: "short",
-                              year: "numeric",
-                            }
-                          )}
-                        </span>
-                      </div>
-                    </div>
-
+                {transactions.map(
+                  (transaction) => (
                     <div
-                      className={
-                        transaction.amount >= 0
-                          ? "transactionAmount positive"
-                          : "transactionAmount negative"
-                      }
+                      className="transaction"
+                      key={transaction.id}
                     >
-                      {transaction.amount >= 0
-                        ? "+"
-                        : "-"}
-                      ₹
-                      {Math.abs(
-                        Number(transaction.amount)
-                      ).toFixed(2)}
+
+                      <div className="transactionLeft">
+
+                        <div className="transactionIcon">
+                          {transaction.amount >=
+                          0
+                            ? "↗"
+                            : "↘"}
+                        </div>
+
+                        <div className="transactionInfo">
+
+                          <strong>
+                            {transaction.description ||
+                              transaction.type.replaceAll(
+                                "_",
+                                " "
+                              )}
+                          </strong>
+
+                          <span>
+                            {formatDate(
+                              transaction.created_at
+                            )}
+                          </span>
+
+                        </div>
+
+                      </div>
+
+                      <strong
+                        className={
+                          transaction.amount >=
+                          0
+                            ? "amountPositive"
+                            : "amountNegative"
+                        }
+                      >
+                        {transaction.amount >= 0
+                          ? "+"
+                          : "-"}
+                        ₹
+                        {Math.abs(
+                          Number(
+                            transaction.amount
+                          )
+                        ).toFixed(2)}
+                      </strong>
+
                     </div>
-                  </div>
-                ))}
+                  )
+                )}
+
               </div>
             )}
+
           </section>
 
           {/* FOOTER */}
 
           <footer className="footer">
+
             <div>
               <strong>
-                <span>AURA</span> CAMP
+                <span>AURA</span>{" "}
+                CAMP
               </strong>
 
               <small>
@@ -837,14 +1051,24 @@ export default function Home() {
             <span>
               © {new Date().getFullYear()} AURA CAMP
             </span>
+
           </footer>
+
         </div>
 
-        {/* MOBILE BOTTOM NAV */}
+        {/* =================================================
+            MOBILE BOTTOM NAVIGATION
+        ================================================= */}
 
-        <nav className="mobileBottomNav">
+        <nav
+          className="bottomNav"
+          aria-label="Mobile navigation"
+        >
+
+          {/* HOME */}
+
           <button
-            className="mobileNavItem active"
+            className="bottomItem active"
             onClick={() =>
               window.scrollTo({
                 top: 0,
@@ -852,46 +1076,158 @@ export default function Home() {
               })
             }
           >
-            <span>⌂</span>
-            <small>Home</small>
+            <span className="bottomIcon">
+              ⌂
+            </span>
+
+            <small>
+              Home
+            </small>
+
+            <i className="activeIndicator" />
           </button>
 
+          {/* OFFERS */}
+
           <button
-            className="mobileNavItem"
+            className="bottomItem"
             onClick={() =>
               document
                 .getElementById("offers")
                 ?.scrollIntoView({
                   behavior: "smooth",
+                  block: "start",
                 })
             }
           >
-            <span>✦</span>
-            <small>Earn</small>
+            <span className="bottomIcon">
+              ▦
+            </span>
+
+            <small>
+              Offers
+            </small>
           </button>
 
-          <button
-            className="mobileNavItem"
-            onClick={() => {
-              window.location.href = "/withdraw";
-            }}
-          >
-            <span>₹</span>
-            <small>Withdraw</small>
-          </button>
+          {/* TELEGRAM */}
 
           <button
-            className="mobileNavItem"
+            className="telegramItem"
+            aria-label="Join AURA CAMP Telegram"
             onClick={() => {
-              window.location.href = "/support";
+              window.location.href =
+                TELEGRAM_URL;
             }}
           >
-            <span>◌</span>
-            <small>Support</small>
+            <span className="telegramButton">
+
+              <svg
+                viewBox="0 0 24 24"
+                width="30"
+                height="30"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                aria-hidden="true"
+              >
+                <path
+                  d="M21.5 3.5 18.3 20c-.24 1.17-.88 1.46-1.78.91l-4.92-3.63-2.37 2.28c-.26.26-.48.48-.99.48l.35-5.02 9.14-8.26c.4-.35-.09-.55-.62-.2L5.8 13.73.94 12.21c-1.06-.33-1.08-1.06.22-1.54L20.16 3.3c.88-.33 1.65.2 1.34.2Z"
+                  fill="currentColor"
+                />
+              </svg>
+
+            </span>
+
+            <small>
+              Telegram
+            </small>
+
           </button>
+
+          {/* MY OFFERS */}
+
+          <button
+            className="bottomItem"
+            onClick={() => {
+              window.location.href =
+                "/my-offers";
+            }}
+          >
+            <span className="bottomIcon">
+              ▤
+            </span>
+
+            <small>
+              My Offers
+            </small>
+          </button>
+
+          {/* PROFILE */}
+
+          <button
+            className="bottomItem"
+            onClick={() => {
+              window.location.href =
+                "/profile";
+            }}
+          >
+            <span className="bottomIcon">
+              ♙
+            </span>
+
+            <small>
+              Profile
+            </small>
+          </button>
+
         </nav>
+
       </main>
     </>
+  );
+}
+
+/* =========================================================
+   QUICK ACTION
+========================================================= */
+
+function QuickAction({
+  icon,
+  title,
+  subtitle,
+  className,
+  onClick,
+}: {
+  icon: string;
+  title: string;
+  subtitle: string;
+  className: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="quickAction"
+      onClick={onClick}
+    >
+      <span
+        className={`quickIcon ${className}`}
+      >
+        {icon}
+      </span>
+
+      <span className="quickText">
+        <strong>
+          {title}
+        </strong>
+
+        <small>
+          {subtitle}
+        </small>
+      </span>
+
+      <span className="quickArrow">
+        →
+      </span>
+    </button>
   );
 }
 
@@ -904,24 +1240,25 @@ function WithdrawalStatus({
 }: {
   status: string;
 }) {
-  const normalized = status.toLowerCase();
+  const value =
+    status.toLowerCase();
 
   if (
-    normalized === "approved" ||
-    normalized === "paid" ||
-    normalized === "success" ||
-    normalized === "completed"
+    value === "approved" ||
+    value === "paid" ||
+    value === "success" ||
+    value === "completed"
   ) {
     return (
-      <span className="status success">
+      <span className="status paid">
         ✓ Paid
       </span>
     );
   }
 
   if (
-    normalized === "rejected" ||
-    normalized === "failed"
+    value === "rejected" ||
+    value === "failed"
   ) {
     return (
       <span className="status rejected">
@@ -938,27 +1275,45 @@ function WithdrawalStatus({
 }
 
 /* =========================================================
-   GLOBAL CSS
+   DATE
 ========================================================= */
 
-const globalStyles = `
+function formatDate(
+  value: string
+) {
+  return new Date(
+    value
+  ).toLocaleDateString(
+    "en-IN",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }
+  );
+}
+
+/* =========================================================
+   CSS
+========================================================= */
+
+const styles = `
+
 * {
   box-sizing: border-box;
 }
 
-html {
+html,
+body {
   width: 100%;
   max-width: 100%;
-  scroll-behavior: smooth;
+  margin: 0;
+  padding: 0;
   overflow-x: hidden;
 }
 
 body {
-  margin: 0;
-  width: 100%;
-  max-width: 100%;
-  overflow-x: hidden;
-  background: #f5fbfc;
+  background: #f3fafb;
 }
 
 button {
@@ -968,24 +1323,33 @@ button {
 
 button:disabled {
   opacity: .65;
-  cursor: not-allowed;
 }
 
+/* =========================================
+   PAGE
+========================================= */
+
 .page {
+  position: relative;
   min-height: 100vh;
   width: 100%;
-  max-width: 100%;
-  position: relative;
   overflow-x: hidden;
-  padding: 14px 12px 45px;
+
+  padding:
+    10px
+    10px
+    45px;
+
+  color: #17202b;
+
   background:
     linear-gradient(
       145deg,
-      #f3fbfc 0%,
-      #f7fbff 48%,
+      #f1fbfc 0%,
+      #f7fbff 52%,
       #faf7ff 100%
     );
-  color: #172033;
+
   font-family:
     Inter,
     ui-sans-serif,
@@ -997,45 +1361,61 @@ button:disabled {
 }
 
 .container {
-  width: 100%;
-  max-width: 1120px;
-  margin: 0 auto;
   position: relative;
   z-index: 2;
+
+  width: 100%;
+  max-width: 1120px;
+
+  margin: 0 auto;
 }
 
-.glow {
+.backgroundGlow {
   position: fixed;
-  border-radius: 50%;
-  pointer-events: none;
-  filter: blur(75px);
+
   z-index: 0;
+
+  border-radius: 50%;
+
+  pointer-events: none;
+
+  filter: blur(80px);
 }
 
-.glowOne {
+.glow1 {
   width: 280px;
   height: 280px;
-  top: -100px;
-  left: -110px;
-  background: rgba(34, 197, 194, .10);
+
+  left: -130px;
+  top: -110px;
+
+  background:
+    rgba(34,197,194,.10);
 }
 
-.glowTwo {
-  width: 320px;
-  height: 320px;
-  right: -130px;
-  bottom: -130px;
-  background: rgba(124, 58, 237, .08);
+.glow2 {
+  width: 340px;
+  height: 340px;
+
+  right: -150px;
+  bottom: -160px;
+
+  background:
+    rgba(124,58,237,.08);
 }
 
-/* ANIMATION */
+/* =========================================
+   ANIMATIONS
+========================================= */
 
-.animateUp {
-  animation: auraUp .55s ease both;
+.fadeUp {
+  animation:
+    fadeUp .45s ease both;
 }
 
-.animateDown {
-  animation: auraDown .5s ease both;
+.fadeDown {
+  animation:
+    fadeDown .4s ease both;
 }
 
 .delay1 {
@@ -1046,56 +1426,67 @@ button:disabled {
   animation-delay: .08s;
 }
 
-.delay3 {
-  animation-delay: .12s;
-}
-
-.delay4 {
-  animation-delay: .16s;
-}
-
-.delay5 {
-  animation-delay: .20s;
-}
-
-@keyframes auraUp {
+@keyframes fadeUp {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform:
+      translateY(10px);
   }
 
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform:
+      translateY(0);
   }
 }
 
-@keyframes auraDown {
+@keyframes fadeDown {
   from {
     opacity: 0;
-    transform: translateY(-9px);
+    transform:
+      translateY(-8px);
   }
 
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform:
+      translateY(0);
   }
 }
 
 @keyframes spin {
   to {
-    transform: rotate(360deg);
+    transform:
+      rotate(360deg);
   }
 }
 
-/* LOADING */
+@keyframes telegramFloat {
+  0%,
+  100% {
+    transform:
+      translateY(0);
+  }
 
-.loadingPage {
+  50% {
+    transform:
+      translateY(-5px);
+  }
+}
+
+/* =========================================
+   LOADING
+========================================= */
+
+.loadingScreen {
   min-height: 100vh;
+
   display: flex;
   align-items: center;
   justify-content: center;
+
   padding: 20px;
+
   background:
     linear-gradient(
       145deg,
@@ -1106,65 +1497,104 @@ button:disabled {
 }
 
 .loadingCard {
-  width: min(320px, 100%);
-  padding: 32px 22px;
+  width:
+    min(320px, 100%);
+
+  padding: 32px 20px;
+
   text-align: center;
-  border-radius: 26px;
-  background: rgba(255,255,255,.92);
-  border: 1px solid #e1eaed;
+
+  border-radius: 25px;
+
+  background:
+    rgba(255,255,255,.95);
+
+  border:
+    1px solid #e1eaed;
+
   box-shadow:
-    0 20px 60px rgba(20,60,80,.10);
+    0 20px 60px
+    rgba(20,60,80,.10);
 }
 
-.loadingLogo {
-  margin-bottom: 20px;
+.loadingBrand {
+  margin-bottom: 22px;
+
   font-size: 25px;
-  font-weight: 900;
+
+  font-weight: 950;
+
   letter-spacing: -1px;
 }
 
-.loadingLogo span {
+.loadingBrand span {
   color: #111827;
 }
 
-.loadingLogo b {
+.loadingBrand b {
   color: #16a34a;
-}
-
-.loadingCard p {
-  margin: 14px 0 0;
-  color: #84919d;
-  font-size: 12px;
 }
 
 .loader {
   width: 29px;
   height: 29px;
+
   margin: auto;
+
+  border:
+    3px solid #e4ecef;
+
+  border-top-color:
+    #155eef;
+
+  border-right-color:
+    #16a34a;
+
   border-radius: 50%;
-  border: 3px solid #e4ecef;
-  border-top-color: #16a34a;
-  border-right-color: #155eef;
-  animation: spin .75s linear infinite;
+
+  animation:
+    spin .7s linear infinite;
 }
 
-/* HEADER */
+.loadingCard p {
+  margin:
+    14px 0 0;
+
+  color: #84919d;
+
+  font-size: 11px;
+}
+
+/* =========================================
+   HEADER
+========================================= */
 
 .header {
   min-width: 0;
-  margin-bottom: 12px;
-  padding: 14px 15px;
-  border-radius: 19px;
+
   display: flex;
   align-items: center;
   justify-content: space-between;
+
   gap: 10px;
-  background: rgba(255,255,255,.88);
-  border: 1px solid rgba(220,230,233,.95);
+
+  margin-bottom: 11px;
+  padding: 13px 14px;
+
+  border-radius: 18px;
+
+  background:
+    rgba(255,255,255,.91);
+
+  border:
+    1px solid #dfe9ec;
+
   box-shadow:
-    0 8px 28px rgba(20,60,80,.055);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+    0 8px 28px
+    rgba(20,60,80,.055);
+
+  backdrop-filter:
+    blur(16px);
 }
 
 .brandArea {
@@ -1172,9 +1602,12 @@ button:disabled {
 }
 
 .brand {
-  font-size: 22px;
-  font-weight: 950;
+  font-size: 21px;
+
   line-height: 1;
+
+  font-weight: 950;
+
   letter-spacing: -1px;
 }
 
@@ -1188,212 +1621,330 @@ button:disabled {
 
 .tagline {
   margin-top: 4px;
+
   color: #94a3a8;
-  font-size: 9px;
+
+  font-size: 8px;
+
   letter-spacing: .45px;
 }
 
-.headerRight {
+.headerActions {
   display: flex;
   align-items: center;
+
   gap: 7px;
+
   flex-shrink: 0;
 }
 
-.iconButton {
-  width: 38px;
-  height: 38px;
+.notificationButton {
+  width: 37px;
+  height: 37px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
   padding: 0;
+
+  border:
+    1px solid #dfe8eb;
+
   border-radius: 12px;
-  border: 1px solid #e1e8eb;
+
   background: #fff;
+
   cursor: pointer;
-  font-size: 16px;
+
+  font-size: 15px;
 }
 
 .logoutButton {
   border: 0;
+
   border-radius: 11px;
-  padding: 10px 13px;
-  background: #132f3f;
-  color: white;
-  font-size: 11px;
-  font-weight: 800;
+
+  padding:
+    10px
+    13px;
+
+  color: #fff;
+
+  background:
+    #132f3f;
+
+  font-size: 10px;
+
+  font-weight: 850;
+
   cursor: pointer;
 }
 
-/* WELCOME */
+/* =========================================
+   WELCOME
+========================================= */
 
 .welcomeCard {
+  min-width: 0;
+
   display: flex;
   align-items: center;
   justify-content: space-between;
+
   gap: 12px;
-  min-width: 0;
-  margin-bottom: 11px;
-  padding: 19px;
-  border-radius: 21px;
+
+  margin-bottom: 10px;
+  padding: 17px;
+
+  border:
+    1px solid #e1eaed;
+
+  border-radius: 19px;
+
   background:
     linear-gradient(
       135deg,
-      #ffffff,
+      #fff,
       #f6fbfc 58%,
       #f5f0ff
     );
-  border: 1px solid #e1eaed;
+
   box-shadow:
-    0 9px 32px rgba(20,60,80,.055);
+    0 9px 32px
+    rgba(20,60,80,.055);
 }
 
-.welcomeContent {
+.welcomeLeft {
   min-width: 0;
+
   display: flex;
   align-items: center;
-  gap: 12px;
+
+  gap: 11px;
 }
 
 .avatar {
-  width: 49px;
-  height: 49px;
-  min-width: 49px;
-  border-radius: 16px;
+  width: 47px;
+  height: 47px;
+
+  min-width: 47px;
+
   display: flex;
   align-items: center;
   justify-content: center;
+
+  border-radius: 14px;
+
   color: #fff;
-  font-size: 18px;
-  font-weight: 900;
+
   background:
     linear-gradient(
       135deg,
       #155eef,
       #16a34a
     );
+
   box-shadow:
-    0 8px 20px rgba(21,94,239,.18);
+    0 8px 20px
+    rgba(21,94,239,.18);
+
+  font-size: 18px;
+
+  font-weight: 900;
 }
 
 .welcomeText {
   min-width: 0;
 }
 
-.smallText {
-  margin: 0 0 3px;
+.welcomeSmall {
+  margin-bottom: 3px;
+
   color: #71808a;
-  font-size: 12px;
+
+  font-size: 11px;
 }
 
 .welcomeText h1 {
   margin: 0;
+
   color: #111827;
-  font-size: 24px;
+
+  font-size: 23px;
+
   line-height: 1.15;
+
   font-weight: 900;
-  letter-spacing: -.55px;
+
+  letter-spacing: -.6px;
+
   overflow-wrap: anywhere;
 }
 
-.subText {
+.welcomeText p {
   margin: 5px 0 0;
+
   color: #71808a;
-  font-size: 11px;
-}
 
-.welcomeBadge {
-  flex-shrink: 0;
-  padding: 8px 10px;
-  border-radius: 11px;
-  background: #edf9f5;
-  color: #138a50;
   font-size: 10px;
-  font-weight: 850;
-  white-space: nowrap;
 }
 
-/* AURA ID */
+.earningBadge {
+  flex-shrink: 0;
 
-.idCard {
+  padding:
+    8px
+    10px;
+
+  border: 0;
+
+  border-radius: 11px;
+
+  color: #138a50;
+
+  background:
+    #edf9f5;
+
+  font-size: 9px;
+
+  font-weight: 850;
+
+  cursor: pointer;
+}
+
+/* =========================================
+   USER ID
+========================================= */
+
+.userIdCard {
   min-width: 0;
+
   display: flex;
   align-items: center;
-  gap: 11px;
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  border-radius: 17px;
-  background: rgba(255,255,255,.93);
-  border: 1px solid #e2eaed;
+
+  gap: 10px;
+
+  margin-bottom: 11px;
+  padding:
+    11px
+    13px;
+
+  border:
+    1px solid #e1eaed;
+
+  border-radius: 16px;
+
+  background:
+    rgba(255,255,255,.94);
+
   box-shadow:
-    0 7px 24px rgba(20,60,80,.045);
+    0 7px 24px
+    rgba(20,60,80,.045);
 }
 
-.idIcon {
+.userIdIcon {
   width: 39px;
   height: 39px;
+
   min-width: 39px;
+
   display: flex;
   align-items: center;
   justify-content: center;
+
   border-radius: 12px;
+
   color: #fff;
+
   background:
     linear-gradient(
       135deg,
       #155eef,
       #16a34a
     );
+
   font-size: 10px;
+
   font-weight: 950;
 }
 
-.idContent {
+.userIdText {
   min-width: 0;
+
   flex: 1;
+
   display: flex;
   flex-direction: column;
+
   gap: 2px;
 }
 
-.idContent span {
+.userIdText span {
   color: #98a5ad;
+
   font-size: 8px;
+
   font-weight: 850;
+
   letter-spacing: .7px;
 }
 
-.idContent strong {
+.userIdText strong {
   color: #16202b;
-  font-size: 15px;
+
+  font-size: 14px;
+
   font-weight: 950;
 }
 
-.verified {
+.verifiedBadge {
   flex-shrink: 0;
-  padding: 5px 8px;
+
+  padding:
+    6px
+    9px;
+
   border-radius: 999px;
-  background: #ecfdf5;
+
   color: #059669;
+
+  background:
+    #ecfdf5;
+
   font-size: 8px;
+
   font-weight: 850;
 }
 
-/* WALLET */
+/* =========================================
+   BALANCE
+========================================= */
 
-.statsGrid {
+.balanceGrid {
   width: 100%;
+
   display: grid;
+
   grid-template-columns:
-    minmax(280px, 1.5fr)
-    repeat(2, minmax(190px, 1fr));
-  gap: 11px;
+    minmax(280px,1.5fr)
+    repeat(2,minmax(190px,1fr));
+
+  gap: 10px;
+
   margin-bottom: 23px;
 }
 
-.walletCard {
+.balanceCard {
   min-width: 0;
-  min-height: 150px;
-  padding: 20px;
-  border-radius: 21px;
+  min-height: 145px;
+
+  padding: 18px;
+
   color: #fff;
+
+  border-radius: 20px;
+
   background:
     linear-gradient(
       135deg,
@@ -1401,189 +1952,284 @@ button:disabled {
       #164b59 55%,
       #166a51
     );
+
   box-shadow:
-    0 14px 34px rgba(18,55,70,.19);
-  overflow: hidden;
+    0 14px 34px
+    rgba(18,55,70,.19);
 }
 
-.walletTop {
+.balanceTop {
   display: flex;
+
   align-items: flex-start;
+
   justify-content: space-between;
+
   gap: 10px;
 }
 
-.walletLabel {
+.balanceLabel {
+  display: block;
+
   margin-bottom: 5px;
+
   opacity: .75;
-  font-size: 11px;
+
+  font-size: 10px;
 }
 
-.walletAmount {
+.balanceAmount {
+  display: block;
+
   font-size: 30px;
+
+  line-height: 1;
+
   font-weight: 950;
-  letter-spacing: -1px;
+
+  letter-spacing: -1.2px;
 }
 
-.walletIcon {
+.balanceIcon {
   width: 46px;
   height: 46px;
+
   min-width: 46px;
+
   display: flex;
   align-items: center;
   justify-content: center;
+
   border-radius: 14px;
-  background: rgba(255,255,255,.14);
-  font-size: 21px;
+
+  background:
+    rgba(255,255,255,.14);
+
+  font-size: 20px;
 }
 
-.walletBottom {
+.balanceBottom {
   display: flex;
+
   align-items: center;
   justify-content: space-between;
+
   gap: 8px;
-  margin-top: 18px;
+
+  margin-top: 19px;
 }
 
-.walletBottom span {
+.balanceBottom span {
   opacity: .68;
-  font-size: 10px;
+
+  font-size: 9px;
 }
 
-.walletBottom button {
+.balanceBottom button {
+  padding:
+    9px
+    12px;
+
   border: 0;
+
   border-radius: 10px;
-  padding: 9px 12px;
+
   color: #123746;
+
   background: #fff;
+
   font-size: 10px;
+
   font-weight: 850;
+
   cursor: pointer;
 }
 
-/* STAT CARDS */
-
-.statCard {
+.miniStat {
   min-width: 0;
-  min-height: 150px;
-  padding: 18px;
-  border-radius: 21px;
-  background: rgba(255,255,255,.92);
-  border: 1px solid #e2eaed;
+  min-height: 145px;
+
+  padding: 17px;
+
+  border:
+    1px solid #e1eaed;
+
+  border-radius: 20px;
+
+  background:
+    rgba(255,255,255,.93);
+
   box-shadow:
-    0 7px 24px rgba(20,60,80,.045);
+    0 7px 24px
+    rgba(20,60,80,.045);
 }
 
-.statIcon {
-  width: 37px;
-  height: 37px;
-  margin-bottom: 11px;
-  border-radius: 11px;
+.miniIcon {
+  width: 36px;
+  height: 36px;
+
+  margin-bottom: 10px;
+
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+
+  border-radius: 11px;
+
+  font-size: 15px;
 }
 
-.pendingIcon {
+.miniIcon.purple {
   color: #8b5cf6;
   background: #f3e8ff;
 }
 
-.earnedIcon {
+.miniIcon.orange {
   color: #ea580c;
   background: #fff7ed;
 }
 
-.cardLabel {
+.miniStat > span {
+  display: block;
+
   margin-bottom: 4px;
+
   color: #6d7c86;
+
   font-size: 10px;
 }
 
-.statAmount {
+.miniStat > strong {
+  display: block;
+
   color: #111827;
-  font-size: 23px;
+
+  font-size: 22px;
+
   font-weight: 900;
 }
 
-.cardHint {
+.miniStat > small {
+  display: block;
+
   margin-top: 5px;
+
   color: #98a5ad;
+
   font-size: 9px;
 }
 
-/* SECTIONS */
+/* =========================================
+   SECTION
+========================================= */
 
 .section {
   min-width: 0;
-  margin-bottom: 25px;
+
+  margin-bottom: 23px;
 }
 
-.sectionHeader {
+.sectionTitle {
   min-width: 0;
+
   display: flex;
   align-items: center;
   justify-content: space-between;
+
   gap: 8px;
-  margin-bottom: 12px;
+
+  margin-bottom: 11px;
 }
 
-.sectionHeader h2 {
+.sectionTitle h2 {
   margin: 0;
+
   color: #15202b;
-  font-size: 18px;
+
+  font-size: 17px;
+
   font-weight: 900;
+
   letter-spacing: -.3px;
 }
 
-.sectionHeader p {
+.sectionTitle p {
   margin: 4px 0 0;
+
   color: #71808a;
-  font-size: 11px;
+
+  font-size: 10px;
 }
 
 .offerCount {
   flex-shrink: 0;
-  padding: 6px 9px;
+
+  padding:
+    6px
+    9px;
+
   border-radius: 999px;
+
   color: #166534;
+
   background: #ecfdf5;
+
   font-size: 9px;
+
   font-weight: 850;
 }
 
-/* WITHDRAWAL */
+/* =========================================
+   WITHDRAWAL
+========================================= */
 
 .withdrawalCard {
   display: flex;
+
   align-items: center;
   justify-content: space-between;
+
   gap: 10px;
-  padding: 13px;
-  border-radius: 17px;
+
+  padding: 12px;
+
+  border:
+    1px solid #e1eaed;
+
+  border-radius: 16px;
+
   background: #fff;
-  border: 1px solid #e3ebed;
-  box-shadow: 0 7px 22px rgba(20,60,80,.045);
+
+  box-shadow:
+    0 7px 22px
+    rgba(20,60,80,.045);
 }
 
 .withdrawalLeft {
   min-width: 0;
+
   display: flex;
   align-items: center;
-  gap: 10px;
+
+  gap: 9px;
 }
 
 .withdrawalIcon {
   width: 38px;
   height: 38px;
+
   min-width: 38px;
+
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+
+  border-radius: 11px;
+
   color: #047857;
+
   background: #ecfdf5;
+
   font-weight: 900;
 }
 
@@ -1594,24 +2240,33 @@ button:disabled {
 
 .withdrawalLeft strong {
   color: #17202a;
-  font-size: 13px;
+
+  font-size: 12px;
 }
 
 .withdrawalLeft span {
   margin-top: 3px;
+
   color: #98a5ad;
-  font-size: 9px;
+
+  font-size: 8px;
 }
 
 .status {
   flex-shrink: 0;
-  padding: 6px 9px;
+
+  padding:
+    6px
+    9px;
+
   border-radius: 999px;
-  font-size: 9px;
+
+  font-size: 8px;
+
   font-weight: 850;
 }
 
-.status.success {
+.status.paid {
   color: #047857;
   background: #ecfdf5;
 }
@@ -1626,127 +2281,195 @@ button:disabled {
   background: #fef2f2;
 }
 
-/* QUICK ACTIONS */
+/* =========================================
+   QUICK ACTIONS
+========================================= */
 
-.actionGrid {
+.quickGrid {
   width: 100%;
+
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 9px;
+
+  grid-template-columns:
+    repeat(4,minmax(0,1fr));
+
+  gap: 8px;
 }
 
-.actionCard {
+.quickAction {
   min-width: 0;
-  min-height: 72px;
-  padding: 12px;
+
+  min-height: 69px;
+
   display: flex;
   align-items: center;
-  gap: 8px;
+
+  gap: 7px;
+
+  padding: 11px;
+
   text-align: left;
-  border: 1px solid #e3ebed;
-  border-radius: 16px;
+
+  border:
+    1px solid #e1eaed;
+
+  border-radius: 15px;
+
   background: #fff;
-  box-shadow: 0 6px 20px rgba(20,60,80,.04);
+
+  box-shadow:
+    0 6px 20px
+    rgba(20,60,80,.04);
+
   cursor: pointer;
 }
 
-.actionIcon {
-  width: 38px;
-  height: 38px;
-  min-width: 38px;
+.quickIcon {
+  width: 35px;
+  height: 35px;
+
+  min-width: 35px;
+
   display: flex;
   align-items: center;
   justify-content: center;
+
   border-radius: 11px;
-  font-size: 16px;
+
+  font-size: 14px;
 }
 
-.actionIcon.red {
+.quickIcon.red {
   color: #e11d48;
   background: #fff1f2;
 }
 
-.actionIcon.green {
+.quickIcon.green {
   color: #059669;
   background: #ecfdf5;
 }
 
-.actionIcon.pink {
+.quickIcon.pink {
   color: #db2777;
   background: #fdf2f8;
 }
 
-.actionIcon.blue {
+.quickIcon.blue {
   color: #2563eb;
   background: #eff6ff;
 }
 
-.actionText {
+.quickText {
   min-width: 0;
+
   flex: 1;
 }
 
-.actionText strong,
-.actionText span {
+.quickText strong,
+.quickText small {
   display: block;
+
   overflow: hidden;
+
   white-space: nowrap;
+
   text-overflow: ellipsis;
 }
 
-.actionText strong {
+.quickText strong {
   color: #17202a;
-  font-size: 11px;
+
+  font-size: 10px;
 }
 
-.actionText span {
+.quickText small {
   margin-top: 3px;
+
   color: #98a5ad;
-  font-size: 9px;
+
+  font-size: 8px;
 }
 
-.arrow {
-  flex-shrink: 0;
+.quickArrow {
   color: #a0abb1;
 }
 
-/* MESSAGE */
+/* =========================================
+   ERROR
+========================================= */
 
-.messageBox {
-  margin-bottom: 18px;
-  padding: 11px 13px;
-  border-radius: 13px;
+.errorMessage {
+  margin-bottom: 17px;
+
+  padding:
+    10px
+    12px;
+
+  border:
+    1px solid #ffd9d5;
+
+  border-radius: 12px;
+
   color: #b42318;
+
   background: #fff5f4;
-  border: 1px solid #ffd9d5;
-  font-size: 11px;
+
+  font-size: 10px;
 }
 
-/* OFFERS */
+/* =========================================
+   OFFERS
+========================================= */
 
 .offerGrid {
   width: 100%;
+
   display: grid;
+
   grid-template-columns:
-    repeat(auto-fit, minmax(270px, 1fr));
-  gap: 12px;
+    repeat(auto-fit,minmax(270px,1fr));
+
+  gap: 11px;
 }
 
 .offerCard {
   min-width: 0;
+
   overflow: hidden;
-  border-radius: 18px;
+
+  border:
+    1px solid #e1eaed;
+
+  border-radius: 17px;
+
   background: #fff;
-  border: 1px solid #e3ebed;
+
   box-shadow:
-    0 7px 24px rgba(20,60,80,.045);
+    0 7px 24px
+    rgba(20,60,80,.045);
+
+  transition:
+    transform .18s ease,
+    box-shadow .18s ease;
+}
+
+.offerCard:hover {
+  transform:
+    translateY(-2px);
+
+  box-shadow:
+    0 14px 32px
+    rgba(20,60,80,.09);
 }
 
 .offerImage {
   position: relative;
+
   width: 100%;
   height: 145px;
+
   overflow: hidden;
+
   background:
     linear-gradient(
       135deg,
@@ -1758,178 +2481,284 @@ button:disabled {
 .offerImage img {
   width: 100%;
   height: 100%;
+
   display: block;
+
   object-fit: cover;
 }
 
-.placeholder {
+.offerPlaceholder {
   width: 100%;
   height: 100%;
+
   display: flex;
   align-items: center;
   justify-content: center;
+
   font-size: 40px;
 }
 
 .rewardBadge {
   position: absolute;
+
   right: 9px;
   bottom: 9px;
-  padding: 6px 9px;
+
+  padding:
+    6px
+    9px;
+
   border-radius: 9px;
+
   color: #047857;
+
   background: #fff;
-  box-shadow: 0 5px 14px rgba(0,0,0,.10);
+
+  box-shadow:
+    0 5px 14px
+    rgba(0,0,0,.1);
+
   font-size: 11px;
+
   font-weight: 900;
 }
 
-.offerContent {
-  padding: 14px;
+.offerBody {
+  padding: 13px;
+
   min-width: 0;
 }
 
-.offerTop {
+.offerMeta {
   display: flex;
+
   align-items: center;
   justify-content: space-between;
+
   gap: 7px;
 }
 
 .category {
   max-width: 60%;
+
   overflow: hidden;
-  padding: 5px 7px;
+
+  padding:
+    5px
+    7px;
+
   border-radius: 8px;
+
   color: #2563eb;
+
   background: #eff6ff;
-  font-size: 9px;
+
+  font-size: 8px;
+
   font-weight: 800;
+
   white-space: nowrap;
+
   text-overflow: ellipsis;
 }
 
 .available {
   color: #059669;
+
   font-size: 8px;
+
   font-weight: 800;
+
   white-space: nowrap;
 }
 
-.offerContent h3 {
-  margin: 9px 0 5px;
+.offerBody h3 {
+  margin:
+    9px
+    0
+    5px;
+
   color: #17202a;
-  font-size: 15px;
+
+  font-size: 14px;
+
   font-weight: 900;
+
   overflow-wrap: anywhere;
 }
 
-.offerContent p {
-  min-height: 34px;
+.offerBody p {
+  min-height: 32px;
+
   margin: 0;
+
   color: #71808a;
+
   font-size: 10px;
+
   line-height: 1.55;
 }
 
-.startButton {
+.startOffer {
   width: 100%;
-  margin-top: 12px;
-  padding: 11px;
+
+  margin-top: 11px;
+
+  padding: 10px;
+
   display: flex;
   align-items: center;
   justify-content: center;
+
   gap: 7px;
+
   border: 0;
-  border-radius: 11px;
+
+  border-radius: 10px;
+
   color: #fff;
+
   background:
     linear-gradient(
       90deg,
       #155eef,
       #2563eb
     );
-  font-size: 11px;
+
+  font-size: 10px;
+
   font-weight: 850;
+
   cursor: pointer;
 }
 
-/* EMPTY */
+/* =========================================
+   EMPTY
+========================================= */
 
-.emptyBox {
-  padding: 36px 18px;
+.emptyState {
+  padding:
+    34px
+    17px;
+
   text-align: center;
-  border-radius: 18px;
-  background: rgba(255,255,255,.9);
-  border: 1px solid #e3ebed;
+
+  border:
+    1px solid #e1eaed;
+
+  border-radius: 17px;
+
+  background:
+    rgba(255,255,255,.9);
 }
 
 .emptyIcon {
-  width: 55px;
-  height: 55px;
-  margin: 0 auto 11px;
+  width: 52px;
+  height: 52px;
+
+  margin:
+    0
+    auto
+    10px;
+
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 17px;
+
+  border-radius: 16px;
+
   background: #eef5ff;
-  font-size: 24px;
+
+  font-size: 23px;
 }
 
-.emptyBox h3 {
-  margin: 0 0 5px;
+.emptyState h3 {
+  margin:
+    0
+    0
+    5px;
+
   color: #17202a;
-  font-size: 15px;
+
+  font-size: 14px;
 }
 
-.emptyBox p {
+.emptyState p {
   margin: 0;
+
   color: #84919a;
+
   font-size: 10px;
 }
 
-/* TRANSACTIONS */
+/* =========================================
+   TRANSACTIONS
+========================================= */
 
-.transactionBox {
+.transactions {
   overflow: hidden;
+
   width: 100%;
-  border-radius: 17px;
-  background: rgba(255,255,255,.94);
-  border: 1px solid #e3ebed;
+
+  border:
+    1px solid #e1eaed;
+
+  border-radius: 16px;
+
+  background:
+    rgba(255,255,255,.94);
 }
 
-.transactionRow {
+.transaction {
   min-width: 0;
-  padding: 12px 14px;
+
   display: flex;
+
   align-items: center;
   justify-content: space-between;
+
   gap: 8px;
-  border-bottom: 1px solid #eef2f3;
+
+  padding:
+    11px
+    13px;
+
+  border-bottom:
+    1px solid #eef2f3;
 }
 
-.transactionRow:last-child {
+.transaction:last-child {
   border-bottom: 0;
 }
 
 .transactionLeft {
   min-width: 0;
+
   flex: 1;
+
   display: flex;
+
   align-items: center;
-  gap: 9px;
+
+  gap: 8px;
 }
 
 .transactionIcon {
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
+  width: 35px;
+  height: 35px;
+
+  min-width: 35px;
+
   display: flex;
   align-items: center;
   justify-content: center;
+
   border-radius: 11px;
+
   color: #059669;
+
   background: #ecfdf5;
+
   font-weight: 900;
 }
 
@@ -1944,150 +2773,190 @@ button:disabled {
 
 .transactionInfo strong {
   max-width: 220px;
+
   overflow: hidden;
+
   color: #17202a;
-  font-size: 11px;
+
+  font-size: 10px;
+
   white-space: nowrap;
+
   text-overflow: ellipsis;
 }
 
 .transactionInfo span {
   margin-top: 3px;
+
   color: #98a5ad;
-  font-size: 9px;
+
+  font-size: 8px;
 }
 
-.transactionAmount {
+.amountPositive,
+.amountNegative {
   flex-shrink: 0;
-  font-size: 12px;
+
+  font-size: 11px;
+
   font-weight: 900;
 }
 
-.positive {
+.amountPositive {
   color: #059669;
 }
 
-.negative {
+.amountNegative {
   color: #ef4444;
 }
 
 .viewAll {
   padding: 0;
+
   border: 0;
-  background: transparent;
+
   color: #2563eb;
-  font-size: 10px;
+
+  background: transparent;
+
+  font-size: 9px;
+
   font-weight: 850;
+
   cursor: pointer;
 }
 
-/* FOOTER */
+/* =========================================
+   FOOTER
+========================================= */
 
 .footer {
-  padding: 20px 3px 4px;
   display: flex;
+
   align-items: center;
   justify-content: space-between;
+
   gap: 12px;
+
+  padding:
+    18px
+    3px
+    4px;
+
   color: #98a5ad;
-  font-size: 9px;
+
+  font-size: 8px;
 }
 
 .footer strong {
   display: block;
-  font-size: 13px;
+
+  color: #16a34a;
+
+  font-size: 12px;
 }
 
 .footer strong span {
   color: #111827;
 }
 
-.footer strong {
-  color: #16a34a;
-}
-
 .footer small {
   display: block;
+
   margin-top: 3px;
+
   color: #a0abb1;
-  font-size: 8px;
+
+  font-size: 7px;
 }
 
-/* MOBILE NAV */
+/* =========================================
+   DESKTOP
+========================================= */
 
-.mobileBottomNav {
-  display: none;
+@media (min-width: 801px) {
+
+  .quickAction,
+  .balanceBottom button,
+  .startOffer,
+  .notificationButton,
+  .logoutButton {
+    transition:
+      transform .18s ease,
+      box-shadow .18s ease;
+  }
+
+  .quickAction:hover {
+    transform:
+      translateY(-2px);
+
+    box-shadow:
+      0 12px 28px
+      rgba(20,60,80,.08);
+  }
+
+  .balanceBottom button:hover,
+  .startOffer:hover,
+  .logoutButton:hover {
+    transform:
+      translateY(-2px);
+  }
 }
 
-/* HOVER */
-
-.actionCard,
-.offerCard,
-.statCard,
-.walletCard,
-.startButton,
-.walletBottom button,
-.iconButton,
-.logoutButton {
-  transition:
-    transform .18s ease,
-    box-shadow .18s ease;
-}
-
-.actionCard:hover {
-  transform: translateY(-3px);
-  box-shadow:
-    0 12px 28px rgba(20,60,80,.09);
-}
-
-.offerCard:hover {
-  transform: translateY(-3px);
-  box-shadow:
-    0 14px 32px rgba(20,60,80,.10);
-}
-
-.startButton:hover,
-.walletBottom button:hover,
-.logoutButton:hover {
-  transform: translateY(-2px);
-}
-
-.iconButton:hover {
-  transform: scale(1.04);
-}
-
-/* TABLET */
+/* =========================================
+   TABLET
+========================================= */
 
 @media (max-width: 800px) {
-  .statsGrid {
-    grid-template-columns: 1fr 1fr;
+
+  .balanceGrid {
+    grid-template-columns:
+      1fr
+      1fr;
   }
 
-  .walletCard {
-    grid-column: span 2;
+  .balanceCard {
+    grid-column:
+      span 2;
   }
 
-  .actionGrid {
-    grid-template-columns: 1fr 1fr;
+  .quickGrid {
+    grid-template-columns:
+      1fr
+      1fr;
   }
 
   .offerGrid {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns:
+      1fr
+      1fr;
   }
 }
 
-/* MOBILE */
+/* =========================================
+   MOBILE
+========================================= */
+
+.bottomNav {
+  display: none;
+}
 
 @media (max-width: 520px) {
+
   .page {
     padding:
-      8px
-      8px
-      calc(88px + env(safe-area-inset-bottom));
+      7px
+      7px
+      calc(
+        104px +
+        env(safe-area-inset-bottom)
+      );
   }
 
   .header {
-    padding: 12px;
+    padding:
+      11px;
+
     border-radius: 17px;
   }
 
@@ -2099,107 +2968,162 @@ button:disabled {
     font-size: 8px;
   }
 
-  .iconButton {
+  .notificationButton {
     width: 35px;
     height: 35px;
+
     font-size: 14px;
   }
 
   .logoutButton {
-    padding: 9px 10px;
-    font-size: 10px;
+    padding:
+      9px
+      10px;
+
+    font-size: 9px;
   }
 
+  /* WELCOME */
+
   .welcomeCard {
-    padding: 15px;
+    padding: 14px;
+
     border-radius: 18px;
+
     align-items: flex-start;
+
     flex-direction: column;
   }
 
-  .welcomeContent {
+  .welcomeLeft {
     width: 100%;
   }
 
   .avatar {
     width: 44px;
     height: 44px;
+
     min-width: 44px;
-    border-radius: 14px;
-    font-size: 16px;
   }
 
   .welcomeText h1 {
-    font-size: 21px;
+    font-size: 20px;
   }
 
-  .subText {
-    font-size: 10px;
+  .welcomeText p {
+    font-size: 9px;
   }
 
-  .welcomeBadge {
+  .earningBadge {
     align-self: flex-start;
+
+    padding:
+      8px
+      10px;
   }
 
-  .idCard {
-    padding: 11px 12px;
-    border-radius: 16px;
+  /* ID */
+
+  .userIdCard {
+    padding:
+      10px
+      11px;
+
+    border-radius: 15px;
   }
 
-  .idContent strong {
-    font-size: 14px;
+  .userIdIcon {
+    width: 38px;
+    height: 38px;
+
+    min-width: 38px;
   }
 
-  .statsGrid {
+  .userIdText strong {
+    font-size: 13px;
+  }
+
+  /* BALANCE */
+
+  .balanceGrid {
     grid-template-columns: 1fr;
-    gap: 9px;
-  }
 
-  .walletCard {
-    grid-column: auto;
-    min-height: 145px;
-    padding: 17px;
-  }
-
-  .walletAmount {
-    font-size: 28px;
-  }
-
-  .statCard {
-    min-height: 132px;
-    padding: 16px;
-  }
-
-  .actionGrid {
-    grid-template-columns: 1fr 1fr;
     gap: 8px;
   }
 
-  .actionCard {
-    min-height: 70px;
-    padding: 10px;
+  .balanceCard {
+    grid-column: auto;
+
+    min-height: 142px;
+
+    padding: 16px;
+  }
+
+  .balanceAmount {
+    font-size: 28px;
+  }
+
+  .miniStat {
+    min-height: 125px;
+
+    padding: 15px;
+  }
+
+  /* SECTION */
+
+  .section {
+    margin-bottom: 21px;
+  }
+
+  .sectionTitle h2 {
+    font-size: 16px;
+  }
+
+  .sectionTitle p {
+    font-size: 9px;
+  }
+
+  /* QUICK */
+
+  .quickGrid {
+    grid-template-columns:
+      1fr
+      1fr;
+
     gap: 7px;
+  }
+
+  .quickAction {
+    min-height: 68px;
+
+    padding:
+      9px;
+
+    gap: 6px;
+
     border-radius: 14px;
   }
 
-  .actionIcon {
-    width: 34px;
-    height: 34px;
-    min-width: 34px;
-    font-size: 14px;
+  .quickIcon {
+    width: 33px;
+    height: 33px;
+
+    min-width: 33px;
   }
 
-  .actionText strong {
-    font-size: 10px;
+  .quickText strong {
+    font-size: 9px;
   }
 
-  .actionText span {
-    font-size: 8px;
+  .quickText small {
+    font-size: 7px;
   }
 
-  .arrow {
+  .quickArrow {
     display: none;
   }
+
+  /* OFFERS */
 
   .offerGrid {
     grid-template-columns: 1fr;
@@ -2209,81 +3133,279 @@ button:disabled {
     height: 155px;
   }
 
-  .offerContent h3 {
-    font-size: 14px;
-  }
+  /* TRANSACTIONS */
 
   .transactionInfo strong {
     max-width: 145px;
   }
 
-  .transactionAmount {
-    font-size: 11px;
+  .amountPositive,
+  .amountNegative {
+    font-size: 10px;
   }
+
+  /* FOOTER */
 
   .footer {
     flex-direction: column;
+
     align-items: flex-start;
-    padding-bottom: 8px;
+
+    padding-bottom: 95px;
   }
 
-  .mobileBottomNav {
+  /* =================================================
+     LARGE PREMIUM BOTTOM NAV
+  ================================================= */
+
+  .bottomNav {
     position: fixed;
+
     left: 8px;
     right: 8px;
-    bottom: max(
-      8px,
-      env(safe-area-inset-bottom)
-    );
-    z-index: 100;
-    height: 61px;
-    padding: 4px 5px;
-    display: flex;
-    align-items: center;
-    border: 1px solid rgba(220,230,233,.95);
-    border-radius: 19px;
-    background: rgba(255,255,255,.94);
+
+    bottom:
+      max(
+        8px,
+        env(safe-area-inset-bottom)
+      );
+
+    z-index: 999;
+
+    height: 76px;
+
+    padding:
+      5px
+      6px;
+
+    display: grid;
+
+    grid-template-columns:
+      1fr
+      1fr
+      1.25fr
+      1fr
+      1fr;
+
+    align-items: end;
+
+    border:
+      1px solid
+      rgba(220,230,233,.95);
+
+    border-radius: 24px;
+
+    background:
+      rgba(255,255,255,.97);
+
     box-shadow:
-      0 13px 35px rgba(15,40,55,.15);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
+      0 16px 45px
+      rgba(15,40,55,.17),
+      0 3px 12px
+      rgba(15,40,55,.05);
+
+    backdrop-filter:
+      blur(20px);
+
+    -webkit-backdrop-filter:
+      blur(20px);
   }
 
-  .mobileNavItem {
-    flex: 1;
-    min-width: 0;
-    height: 53px;
-    padding: 0;
+  /* NORMAL NAV */
+
+  .bottomItem {
+    position: relative;
+
+    width: 100%;
+    height: 65px;
+
+    padding:
+      4px
+      2px;
+
+    border: 0;
+    outline: 0;
+
     display: flex;
+
     flex-direction: column;
+
     align-items: center;
     justify-content: center;
-    gap: 2px;
-    border: 0;
+
+    gap: 3px;
+
+    color: #7c8790;
+
     background: transparent;
-    color: #7b8992;
+
+    cursor: pointer;
+
+    transition:
+      transform .18s ease,
+      color .18s ease;
+  }
+
+  .bottomItem:active {
+    transform:
+      scale(.91);
+  }
+
+  .bottomIcon {
+    width: 37px;
+    height: 37px;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 12px;
+
+    font-size: 23px;
+
+    line-height: 1;
+
+    font-weight: 700;
+  }
+
+  .bottomItem small {
+    font-size: 8px;
+
+    line-height: 10px;
+
+    font-weight: 800;
+
+    white-space: nowrap;
+  }
+
+  /* ACTIVE HOME */
+
+  .bottomItem.active {
+    color: #155eef;
+  }
+
+  .bottomItem.active
+  .bottomIcon {
+    color: #155eef;
+
+    background:
+      #edf3ff;
+  }
+
+  .activeIndicator {
+    position: absolute;
+
+    bottom: 0;
+
+    width: 31px;
+    height: 4px;
+
+    border-radius: 999px;
+
+    background:
+      linear-gradient(
+        90deg,
+        #155eef,
+        #16a34a
+      );
+  }
+
+  /* =================================================
+     TELEGRAM CENTER
+  ================================================= */
+
+  .telegramItem {
+    position: relative;
+
+    height: 84px;
+
+    margin-top: -31px;
+
+    padding: 0;
+
+    border: 0;
+    outline: 0;
+
+    display: flex;
+
+    flex-direction: column;
+
+    align-items: center;
+    justify-content: flex-end;
+
+    gap: 3px;
+
+    color: #64748b;
+
+    background: transparent;
+
     cursor: pointer;
   }
 
-  .mobileNavItem span {
-    font-size: 18px;
-    line-height: 19px;
-    font-weight: 900;
+  .telegramButton {
+    width: 66px;
+    height: 66px;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 50%;
+
+    color: #fff;
+
+    background:
+      linear-gradient(
+        145deg,
+        #155eef 0%,
+        #2563eb 45%,
+        #16a34a 100%
+      );
+
+    border:
+      4px solid #fff;
+
+    box-shadow:
+      0 10px 27px
+      rgba(21,94,239,.30),
+      0 4px 13px
+      rgba(22,163,74,.15);
+
+    animation:
+      telegramFloat
+      2.8s
+      ease-in-out
+      infinite;
   }
 
-  .mobileNavItem small {
+  .telegramItem small {
     font-size: 8px;
-    font-weight: 800;
+
+    line-height: 10px;
+
+    font-weight: 850;
+
+    color: #64748b;
+
+    white-space: nowrap;
   }
 
-  .mobileNavItem.active {
-    color: #155eef;
+  .telegramItem:active
+  .telegramButton {
+    transform:
+      scale(.90);
   }
+
 }
 
-/* VERY SMALL PHONES */
+/* =========================================
+   SMALL PHONES
+========================================= */
 
-@media (max-width: 360px) {
+@media (max-width: 370px) {
+
   .page {
     padding-left: 6px;
     padding-right: 6px;
@@ -2294,30 +3416,81 @@ button:disabled {
   }
 
   .logoutButton {
-    padding: 8px;
-    font-size: 9px;
+    padding:
+      8px;
+
+    font-size: 8px;
   }
 
   .welcomeText h1 {
     font-size: 19px;
   }
 
-  .actionCard {
-    padding: 9px 7px;
+  .quickAction {
+    padding:
+      8px
+      7px;
   }
 
-  .actionIcon {
+  .quickIcon {
     width: 31px;
     height: 31px;
+
     min-width: 31px;
   }
 
-  .actionText strong {
-    font-size: 9px;
+  .quickText strong {
+    font-size: 8px;
   }
 
-  .actionText span {
+  .quickText small {
     font-size: 7px;
   }
+
+  .bottomNav {
+    height: 73px;
+
+    left: 6px;
+    right: 6px;
+
+    border-radius: 22px;
+  }
+
+  .telegramButton {
+    width: 60px;
+    height: 60px;
+  }
+
+  .telegramItem {
+    height: 80px;
+
+    margin-top: -28px;
+  }
+
+  .bottomIcon {
+    width: 34px;
+    height: 34px;
+
+    font-size: 21px;
+  }
+
 }
+
+/* =========================================
+   REDUCED MOTION
+========================================= */
+
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+  }
+
+}
+
 `;
