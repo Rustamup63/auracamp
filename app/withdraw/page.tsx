@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -10,12 +10,13 @@ const supabase = createClient(
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      flowType: "pkce",
     },
   }
 );
 
 const MIN_WITHDRAWAL = 20;
+
+type WithdrawalStatus = "pending" | "paid" | "rejected";
 
 type Withdrawal = {
   id: string;
@@ -25,7 +26,7 @@ type Withdrawal = {
   created_at: string;
 };
 
-type SavedAccount = {
+type WithdrawalAccount = {
   id: string;
   method: "upi" | "bank";
   account_name: string;
@@ -33,74 +34,64 @@ type SavedAccount = {
   bank_name: string | null;
   account_number: string | null;
   ifsc_code: string | null;
-  is_default: boolean;
 };
+
+type MessageType = "success" | "error" | "info";
 
 export default function WithdrawPage() {
   const [balance, setBalance] = useState(0);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
-  const [savedAccounts, setSavedAccounts] = useState<SavedAccount[]>([]);
+  const [savedAccounts, setSavedAccounts] = useState<
+    WithdrawalAccount[]
+  >([]);
 
-  const [method, setMethod] =
-    useState<"upi" | "bank">("upi");
-
+  const [method, setMethod] = useState<"upi" | "bank">("upi");
   const [amount, setAmount] = useState("");
 
   const [upiId, setUpiId] = useState("");
   const [accountName, setAccountName] = useState("");
-  const [bankName, setBankName] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
   const [ifscCode, setIfscCode] = useState("");
 
-  const [loading, setLoading] = useState(false);
-  const [savingAccount, setSavingAccount] =
-    useState(false);
-
-  const [editingAccount, setEditingAccount] =
-    useState(false);
-
-  const [pageLoading, setPageLoading] =
-    useState(true);
+  const [editingAccount, setEditingAccount] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
 
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] =
-    useState<"success" | "error">("success");
+    useState<MessageType>("info");
+
+  const userIdRef = useRef<string | null>(null);
+  const channelRef = useRef<any>(null);
 
   useEffect(() => {
     let mounted = true;
 
-    async function start() {
-      await loadWithdrawalData(mounted);
-
-      if (!mounted) return;
-
-      setPageLoading(false);
-    }
-
-    start();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  /*
-   * REALTIME WITHDRAWAL STATUS
-   */
-  useEffect(() => {
-    let channel:
-      | ReturnType<typeof supabase.channel>
-      | null = null;
-
-    async function subscribe() {
+    async function init() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
-      if (!user) return;
+      if (!user) {
+        window.location.replace("/login");
+        return;
+      }
 
-      channel = supabase
-        .channel(`auracamp-withdrawals-${user.id}`)
+      userIdRef.current = user.id;
+
+      await loadWithdrawalData(user.id, mounted);
+
+      /*
+       * REALTIME WITHDRAWAL STATUS
+       *
+       * User will see:
+       * pending → paid
+       * pending → rejected
+       *
+       * without manually refreshing the page.
+       */
+      const channel = supabase
+        .channel(`withdrawals-user-${user.id}`)
         .on(
           "postgres_changes",
           {
@@ -110,119 +101,98 @@ export default function WithdrawPage() {
             filter: `user_id=eq.${user.id}`,
           },
           async () => {
-            await Promise.all([
-              loadWithdrawals(user.id),
-              loadBalance(user.id),
-            ]);
+            await refreshWithdrawalData(user.id);
           }
         )
         .subscribe();
+
+      channelRef.current = channel;
+
+      return () => {
+        mounted = false;
+
+        if (channelRef.current) {
+          supabase.removeChannel(channelRef.current);
+          channelRef.current = null;
+        }
+      };
     }
 
-    subscribe();
+    const cleanupPromise = init();
 
     return () => {
-      if (channel) {
-        supabase.removeChannel(channel);
-      }
+      mounted = false;
+
+      cleanupPromise.then((cleanup) => {
+        if (typeof cleanup === "function") {
+          cleanup();
+        }
+      });
     };
   }, []);
 
   /*
-   * REALTIME WALLET BALANCE
+   * Also refresh when user returns to this tab.
+   * This helps even if realtime is temporarily unavailable.
    */
   useEffect(() => {
-    let channel:
-      | ReturnType<typeof supabase.channel>
-      | null = null;
+    const handleVisibility = () => {
+      if (
+        document.visibilityState === "visible" &&
+        userIdRef.current
+      ) {
+        refreshWithdrawalData(userIdRef.current);
+      }
+    };
 
-    async function subscribe() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) return;
-
-      channel = supabase
-        .channel(`auracamp-profile-${user.id}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "profiles",
-            filter: `id=eq.${user.id}`,
-          },
-          (payload) => {
-            const next = payload.new as {
-              wallet_balance?: number;
-            };
-
-            if (
-              typeof next.wallet_balance !==
-              "undefined"
-            ) {
-              setBalance(
-                Number(next.wallet_balance || 0)
-              );
-            }
-          }
-        )
-        .subscribe();
-    }
-
-    subscribe();
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibility
+    );
 
     return () => {
-      if (channel) {
-        supabase.removeChannel(channel);
-      }
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibility
+      );
     };
   }, []);
 
   async function loadWithdrawalData(
+    userId: string,
     mounted = true
   ) {
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        window.location.replace("/login");
-        return;
-      }
-
       const [
         profileResult,
-        withdrawalResult,
-        accountResult,
+        withdrawalsResult,
+        accountsResult,
       ] = await Promise.all([
         supabase
           .from("profiles")
           .select("wallet_balance")
-          .eq("id", user.id)
+          .eq("id", userId)
           .maybeSingle(),
 
         supabase
           .from("withdrawals")
           .select(
-            "id,amount,method,status,created_at"
+            "id, amount, method, status, created_at"
           )
-          .eq("user_id", user.id)
+          .eq("user_id", userId)
           .order("created_at", {
             ascending: false,
           })
-          .limit(20),
+          .limit(10),
 
         supabase
           .from("withdrawal_accounts")
           .select(
-            "id,method,account_name,upi_id,bank_name,account_number,ifsc_code,is_default"
+            "id, method, account_name, upi_id, bank_name, account_number, ifsc_code"
           )
-          .eq("user_id", user.id)
+          .eq("user_id", userId)
           .order("created_at", {
-            ascending: true,
+            ascending: false,
           }),
       ]);
 
@@ -230,257 +200,197 @@ export default function WithdrawPage() {
 
       if (profileResult.data) {
         setBalance(
-          Number(
-            profileResult.data.wallet_balance || 0
-          )
+          Number(profileResult.data.wallet_balance || 0)
         );
       }
 
       setWithdrawals(
-        withdrawalResult.data || []
+        (withdrawalsResult.data || []) as Withdrawal[]
       );
 
-      if (!accountResult.error) {
+      if (accountsResult.error) {
+        console.error(
+          "Saved payment methods error:",
+          accountsResult.error
+        );
+      } else {
         const accounts =
-          accountResult.data || [];
+          (accountsResult.data || []) as WithdrawalAccount[];
 
         setSavedAccounts(accounts);
 
-        const current = accounts.find(
-          (item) =>
-            item.method === method
-        );
+        const preferred =
+          accounts.find(
+            (item) => item.method === method
+          ) || accounts[0];
 
-        if (current) {
-          loadAccountIntoForm(current);
+        if (preferred) {
+          applySavedAccount(preferred);
         }
       }
     } catch (error) {
       console.error(
-        "Withdrawal page error:",
+        "Withdrawal data loading error:",
+        error
+      );
+    } finally {
+      if (mounted) {
+        setLoading(false);
+      }
+    }
+  }
+
+  async function refreshWithdrawalData(userId: string) {
+    try {
+      const [profileResult, withdrawalsResult] =
+        await Promise.all([
+          supabase
+            .from("profiles")
+            .select("wallet_balance")
+            .eq("id", userId)
+            .maybeSingle(),
+
+          supabase
+            .from("withdrawals")
+            .select(
+              "id, amount, method, status, created_at"
+            )
+            .eq("user_id", userId)
+            .order("created_at", {
+              ascending: false,
+            })
+            .limit(10),
+        ]);
+
+      if (profileResult.data) {
+        setBalance(
+          Number(profileResult.data.wallet_balance || 0)
+        );
+      }
+
+      setWithdrawals(
+        (withdrawalsResult.data || []) as Withdrawal[]
+      );
+    } catch (error) {
+      console.error(
+        "Withdrawal refresh error:",
         error
       );
     }
   }
 
-  async function loadBalance(userId: string) {
-    const { data } = await supabase
-      .from("profiles")
-      .select("wallet_balance")
-      .eq("id", userId)
-      .maybeSingle();
-
-    if (data) {
-      setBalance(
-        Number(data.wallet_balance || 0)
-      );
-    }
-  }
-
-  async function loadWithdrawals(userId: string) {
-    const { data, error } = await supabase
-      .from("withdrawals")
-      .select(
-        "id,amount,method,status,created_at"
-      )
-      .eq("user_id", userId)
-      .order("created_at", {
-        ascending: false,
-      })
-      .limit(20);
-
-    if (!error) {
-      setWithdrawals(data || []);
-    }
-  }
-
-  function loadAccountIntoForm(
-    account: SavedAccount
+  function showMessage(
+    text: string,
+    type: MessageType
   ) {
-    setAccountName(
-      account.account_name || ""
-    );
+    setMessage(text);
+    setMessageType(type);
+  }
 
-    if (account.method === "upi") {
-      setUpiId(account.upi_id || "");
-      setBankName("");
-      setAccountNumber("");
-      setIfscCode("");
-    } else {
-      setUpiId("");
-      setBankName(
-        account.bank_name || ""
-      );
-      setAccountNumber(
-        account.account_number || ""
-      );
-      setIfscCode(
-        account.ifsc_code || ""
-      );
-    }
-
+  function applySavedAccount(
+    account: WithdrawalAccount
+  ) {
+    setMethod(account.method);
+    setAccountName(account.account_name || "");
+    setUpiId(account.upi_id || "");
+    setAccountNumber(account.account_number || "");
+    setIfscCode(account.ifsc_code || "");
     setEditingAccount(false);
   }
 
-  function clearPaymentForm() {
+  function editSavedAccount(
+    account: WithdrawalAccount
+  ) {
+    applySavedAccount(account);
+    setEditingAccount(true);
+
+    showMessage(
+      "Edit your saved payment details below.",
+      "info"
+    );
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  }
+
+  function selectMethod(
+    nextMethod: "upi" | "bank"
+  ) {
+    setMethod(nextMethod);
+    setEditingAccount(false);
+    setMessage("");
+
+    const saved = savedAccounts.find(
+      (account) => account.method === nextMethod
+    );
+
+    if (saved) {
+      applySavedAccount(saved);
+      return;
+    }
+
     setAccountName("");
     setUpiId("");
-    setBankName("");
     setAccountNumber("");
     setIfscCode("");
   }
 
-  function handleMethodChange(
-    nextMethod: "upi" | "bank"
-  ) {
-    setMethod(nextMethod);
-    setMessage("");
-    setEditingAccount(false);
-
-    const saved = savedAccounts.find(
-      (account) =>
-        account.method === nextMethod
-    );
-
-    if (saved) {
-      loadAccountIntoForm(saved);
-    } else {
-      clearPaymentForm();
-    }
-  }
-
-  async function savePaymentAccount() {
+  async function savePaymentMethod() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
     if (!user) {
       window.location.replace("/login");
-      return;
+      return false;
     }
 
-    if (!accountName.trim()) {
+    const payload =
+      method === "upi"
+        ? {
+            user_id: user.id,
+            method: "upi",
+            account_name: accountName.trim(),
+            upi_id: upiId.trim(),
+            bank_name: null,
+            account_number: null,
+            ifsc_code: null,
+          }
+        : {
+            user_id: user.id,
+            method: "bank",
+            account_name: accountName.trim(),
+            upi_id: null,
+            bank_name: null,
+            account_number:
+              accountNumber.trim(),
+            ifsc_code:
+              ifscCode.trim().toUpperCase(),
+          };
+
+    const { error } = await supabase
+      .from("withdrawal_accounts")
+      .upsert(payload, {
+        onConflict: "user_id,method",
+      });
+
+    if (error) {
+      console.error(
+        "Save payment method error:",
+        error
+      );
+
       showMessage(
-        "Please enter account holder name.",
+        `Payment method could not be saved: ${error.message}`,
         "error"
       );
-      return;
+
+      return false;
     }
 
-    if (
-      method === "upi" &&
-      !upiId.trim()
-    ) {
-      showMessage(
-        "Please enter your UPI ID.",
-        "error"
-      );
-      return;
-    }
-
-    if (
-      method === "bank" &&
-      (
-        !bankName.trim() ||
-        !accountNumber.trim() ||
-        !ifscCode.trim()
-      )
-    ) {
-      showMessage(
-        "Please complete all bank details.",
-        "error"
-      );
-      return;
-    }
-
-    setSavingAccount(true);
-    setMessage("");
-
-    try {
-      const accountData = {
-        user_id: user.id,
-        method,
-        account_name:
-          accountName.trim(),
-
-        upi_id:
-          method === "upi"
-            ? upiId.trim()
-            : null,
-
-        bank_name:
-          method === "bank"
-            ? bankName.trim()
-            : null,
-
-        account_number:
-          method === "bank"
-            ? accountNumber.trim()
-            : null,
-
-        ifsc_code:
-          method === "bank"
-            ? ifscCode
-                .trim()
-                .toUpperCase()
-            : null,
-
-        is_default: true,
-      };
-
-      const { data, error } =
-        await supabase
-          .from("withdrawal_accounts")
-          .upsert(accountData, {
-            onConflict:
-              "user_id,method",
-          })
-          .select(
-            "id,method,account_name,upi_id,bank_name,account_number,ifsc_code,is_default"
-          )
-          .single();
-
-      if (error) {
-        console.error(error);
-
-        showMessage(
-          error.message,
-          "error"
-        );
-
-        return;
-      }
-
-      setSavedAccounts(
-        (previous) => {
-          const filtered =
-            previous.filter(
-              (item) =>
-                item.method !== method
-            );
-
-          return [...filtered, data];
-        }
-      );
-
-      setEditingAccount(false);
-
-      showMessage(
-        method === "upi"
-          ? "UPI details saved successfully."
-          : "Bank details saved successfully.",
-        "success"
-      );
-    } catch (error) {
-      console.error(error);
-
-      showMessage(
-        "Unable to save payment details.",
-        "error"
-      );
-    } finally {
-      setSavingAccount(false);
-    }
+    return true;
   }
 
   async function submitWithdrawal(
@@ -488,15 +398,17 @@ export default function WithdrawPage() {
   ) {
     e.preventDefault();
 
+    if (submitting) return;
+
     setMessage("");
 
-    const numericAmount =
-      Number(amount);
+    const numericAmount = Number(amount);
 
-    /* ₹20 MINIMUM */
-
+    /*
+     * MINIMUM = ₹20
+     */
     if (
-      !numericAmount ||
+      !Number.isFinite(numericAmount) ||
       numericAmount < MIN_WITHDRAWAL
     ) {
       showMessage(
@@ -506,40 +418,42 @@ export default function WithdrawPage() {
       return;
     }
 
+    /*
+     * Amount cannot be greater than wallet balance.
+     */
     if (numericAmount > balance) {
       showMessage(
-        "Insufficient wallet balance.",
+        `Insufficient wallet balance. Available balance is ₹${balance.toFixed(
+          2
+        )}.`,
         "error"
       );
       return;
     }
 
-    if (!accountName.trim()) {
-      showMessage(
-        "Please enter account holder name.",
-        "error"
-      );
-      return;
-    }
-
+    /*
+     * UPI validation.
+     */
     if (
       method === "upi" &&
-      !upiId.trim()
+      (!accountName.trim() ||
+        !upiId.trim())
     ) {
       showMessage(
-        "Please enter your UPI ID.",
+        "Please enter account holder name and UPI ID.",
         "error"
       );
       return;
     }
 
+    /*
+     * Bank validation.
+     */
     if (
       method === "bank" &&
-      (
-        !bankName.trim() ||
+      (!accountName.trim() ||
         !accountNumber.trim() ||
-        !ifscCode.trim()
-      )
+        !ifscCode.trim())
     ) {
       showMessage(
         "Please complete all bank details.",
@@ -548,111 +462,67 @@ export default function WithdrawPage() {
       return;
     }
 
-    setLoading(true);
+    setSubmitting(true);
 
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        window.location.replace("/login");
-        return;
-      }
-
       /*
-       * SAVE PAYMENT ACCOUNT
+       * EDIT SAVED ACCOUNT
+       *
+       * Does not create a withdrawal.
        */
+      if (editingAccount) {
+        const saved =
+          await savePaymentMethod();
 
-      const paymentData = {
-        user_id: user.id,
-        method,
-        account_name:
-          accountName.trim(),
+        if (saved) {
+          showMessage(
+            "Payment details updated successfully.",
+            "success"
+          );
 
-        upi_id:
-          method === "upi"
-            ? upiId.trim()
-            : null,
+          setEditingAccount(false);
 
-        bank_name:
-          method === "bank"
-            ? bankName.trim()
-            : null,
-
-        account_number:
-          method === "bank"
-            ? accountNumber.trim()
-            : null,
-
-        ifsc_code:
-          method === "bank"
-            ? ifscCode
-                .trim()
-                .toUpperCase()
-            : null,
-
-        is_default: true,
-      };
-
-      const { error: saveError } =
-        await supabase
-          .from("withdrawal_accounts")
-          .upsert(paymentData, {
-            onConflict:
-              "user_id,method",
-          });
-
-      if (saveError) {
-        console.error(saveError);
-
-        showMessage(
-          "Unable to save payment details. Withdrawal was not submitted.",
-          "error"
-        );
-
-        return;
-      }
-
-      /*
-       * REQUEST WITHDRAWAL
-       */
-
-      const { error } =
-        await supabase.rpc(
-          "request_withdrawal",
-          {
-            p_amount:
-              numericAmount,
-
-            p_method:
-              method,
-
-            p_upi_id:
-              method === "upi"
-                ? upiId.trim()
-                : "",
-
-            p_account_name:
-              accountName.trim(),
-
-            p_account_number:
-              method === "bank"
-                ? accountNumber.trim()
-                : "",
-
-            p_ifsc_code:
-              method === "bank"
-                ? ifscCode
-                    .trim()
-                    .toUpperCase()
-                : "",
+          if (userIdRef.current) {
+            await loadWithdrawalData(
+              userIdRef.current,
+              true
+            );
           }
-        );
+        }
+
+        return;
+      }
+
+      /*
+       * CREATE WITHDRAWAL
+       */
+      const { error } = await supabase.rpc(
+        "request_withdrawal",
+        {
+          p_amount: numericAmount,
+          p_method: method,
+          p_upi_id:
+            method === "upi"
+              ? upiId.trim()
+              : "",
+          p_account_name:
+            accountName.trim(),
+          p_account_number:
+            method === "bank"
+              ? accountNumber.trim()
+              : "",
+          p_ifsc_code:
+            method === "bank"
+              ? ifscCode
+                  .trim()
+                  .toUpperCase()
+              : "",
+        }
+      );
 
       if (error) {
         console.error(
-          "Withdrawal RPC error:",
+          "Withdrawal request error:",
           error
         );
 
@@ -664,141 +534,175 @@ export default function WithdrawPage() {
         return;
       }
 
+      /*
+       * Save payment details for next withdrawal.
+       */
+      const saved =
+        await savePaymentMethod();
+
       showMessage(
-        "Withdrawal request submitted successfully.",
+        saved
+          ? "Withdrawal request submitted successfully."
+          : "Withdrawal submitted successfully. Payment details could not be saved.",
         "success"
       );
 
-      /*
-       * Keep saved payment details.
-       * Only clear amount.
-       */
-
       setAmount("");
+      setEditingAccount(false);
 
       /*
-       * Immediately refresh.
-       * Realtime will also update it.
+       * IMPORTANT:
+       * Immediately refresh the recent history.
        */
-
-      await Promise.all([
-        loadWithdrawals(user.id),
-        loadBalance(user.id),
-      ]);
+      if (userIdRef.current) {
+        await refreshWithdrawalData(
+          userIdRef.current
+        );
+      }
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Withdrawal submission error:",
+        error
+      );
 
       showMessage(
         "Something went wrong. Please try again.",
         "error"
       );
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   }
 
-  function showMessage(
-    text: string,
-    type: "success" | "error"
-  ) {
-    setMessage(text);
-    setMessageType(type);
-  }
-
-  function getStatusInfo(status: string) {
-    const value =
-      status.toLowerCase().trim();
+  /*
+   * ONLY THREE USER-FACING STATES:
+   *
+   * pending
+   * paid
+   * rejected
+   *
+   * Any unknown/non-final state is safely shown as Pending.
+   */
+  function getStatus(status: string): {
+    label: string;
+    type: WithdrawalStatus;
+    icon: string;
+  } {
+    const normalized =
+      String(status || "")
+        .toLowerCase()
+        .trim();
 
     if (
-      value === "paid" ||
-      value === "approved" ||
-      value === "success" ||
-      value === "completed"
+      normalized === "paid" ||
+      normalized === "approved" ||
+      normalized === "success"
     ) {
       return {
         label: "Paid",
+        type: "paid",
         icon: "✓",
-        className: "statusPaid",
       };
     }
 
     if (
-      value === "rejected" ||
-      value === "failed" ||
-      value === "cancelled"
+      normalized === "rejected" ||
+      normalized === "failed" ||
+      normalized === "cancelled"
     ) {
       return {
         label: "Rejected",
+        type: "rejected",
         icon: "×",
-        className: "statusRejected",
+      };
+    }
+
+    /*
+     * No Processing state.
+     * Everything non-final is Pending.
+     */
+    return {
+      label: "Pending",
+      type: "pending",
+      icon: "⏳",
+    };
+  }
+
+  function statusStyle(
+    status: string
+  ): React.CSSProperties {
+    const state = getStatus(status);
+
+    if (state.type === "paid") {
+      return {
+        background:
+          "linear-gradient(135deg,#dcfce7,#ecfdf5)",
+        color: "#15803d",
+        border:
+          "1px solid #bbf7d0",
+      };
+    }
+
+    if (state.type === "rejected") {
+      return {
+        background:
+          "linear-gradient(135deg,#fee2e2,#fff1f2)",
+        color: "#dc2626",
+        border:
+          "1px solid #fecaca",
       };
     }
 
     return {
-      label:
-        value === "processing"
-          ? "Processing"
-          : "Pending",
-      icon: "◷",
-      className: "statusPending",
+      background:
+        "linear-gradient(135deg,#fef3c7,#fffbeb)",
+      color: "#b45309",
+      border:
+        "1px solid #fde68a",
     };
   }
 
-  function formatDate(
-    value: string
-  ) {
-    return new Date(
-      value
-    ).toLocaleDateString(
-      "en-IN",
-      {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      }
-    );
+  function statusIconStyle(
+    status: string
+  ): React.CSSProperties {
+    const state = getStatus(status);
+
+    if (state.type === "paid") {
+      return {
+        background: "#dcfce7",
+        color: "#15803d",
+      };
+    }
+
+    if (state.type === "rejected") {
+      return {
+        background: "#fee2e2",
+        color: "#dc2626",
+      };
+    }
+
+    return {
+      background: "#fef3c7",
+      color: "#b45309",
+    };
   }
 
-  function formatTime(
-    value: string
-  ) {
-    return new Date(
-      value
-    ).toLocaleTimeString(
-      "en-IN",
-      {
-        hour: "2-digit",
-        minute: "2-digit",
-      }
-    );
-  }
-
-  const savedCurrentAccount =
-    savedAccounts.find(
-      (account) =>
-        account.method === method
-    );
-
-  const isSuccess =
-    messageType === "success";
-
-  if (pageLoading) {
+  if (loading) {
     return (
       <>
-        <style>{styles}</style>
+        <style>{globalStyles}</style>
 
-        <main className="loadingPage">
-          <div className="loadingCard">
-            <div className="loadingBrand">
-              <span>AURA</span>{" "}
-              <b>CAMP</b>
+        <main style={styles.page}>
+          <div style={styles.loadingBox}>
+            <div style={styles.loadingLogo}>
+              AURA <span>CAMP</span>
             </div>
 
-            <div className="loadingSpinner" />
+            <div style={styles.loader} />
 
-            <p>
-              Preparing secure withdrawal...
-            </p>
+            <div style={styles.loadingText}>
+              Loading withdrawal...
+            </div>
           </div>
         </main>
       </>
@@ -807,323 +711,296 @@ export default function WithdrawPage() {
 
   return (
     <>
-      <style>{styles}</style>
+      <style>{globalStyles}</style>
 
-      <main className="page">
+      <main style={styles.page}>
+        <div style={styles.backgroundGlowOne} />
+        <div style={styles.backgroundGlowTwo} />
 
-        <div className="glow glowOne" />
-        <div className="glow glowTwo" />
-
-        <div className="container">
+        <div style={styles.container}>
 
           {/* HEADER */}
 
-          <header className="header">
-
+          <header style={styles.header}>
             <button
               type="button"
-              className="backButton"
               onClick={() =>
                 window.location.replace("/")
               }
+              style={styles.backButton}
             >
-              <span>←</span>
-              Back
+              ← Back
             </button>
 
-            <div className="headerCenter">
-              <div className="brand">
-                <span>AURA</span>{" "}
-                <b>CAMP</b>
+            <div style={styles.headerCenter}>
+              <div style={styles.brand}>
+                AURA CAMP
               </div>
 
-              <div className="subtitle">
-                Secure Withdrawal
+              <div style={styles.subtitle}>
+                Withdrawal
               </div>
             </div>
 
-            <div className="headerShield">
-              🔒
-            </div>
-
+            <div style={styles.headerSpacer} />
           </header>
 
           {/* BALANCE */}
 
-          <section className="balanceCard">
-
-            <div className="balanceTop">
+          <section style={styles.balanceCard}>
+            <div style={styles.balanceTop}>
               <div>
-                <span className="balanceLabel">
+                <div style={styles.balanceLabel}>
                   Available Balance
-                </span>
+                </div>
 
-                <strong className="balance">
+                <div style={styles.balance}>
                   ₹{balance.toFixed(2)}
-                </strong>
+                </div>
+
+                <div style={styles.balanceHint}>
+                  Minimum withdrawal: ₹20
+                </div>
               </div>
 
-              <div className="balanceIcon">
-                ₹
+              <div style={styles.balanceIcon}>
+                💳
               </div>
             </div>
-
-            <div className="balanceBottom">
-
-              <span>
-                Minimum withdrawal
-                <strong>
-                  ₹{MIN_WITHDRAWAL}
-                </strong>
-              </span>
-
-              <span className="walletReady">
-                ● Wallet Ready
-              </span>
-
-            </div>
-
           </section>
 
-          {/* WITHDRAW */}
+          {/* WITHDRAW CARD */}
 
-          <section className="card">
-
-            <div className="cardHeading">
-              <div className="headingIcon">
-                💸
-              </div>
-
+          <section style={styles.card}>
+            <div style={styles.sectionHeader}>
               <div>
-                <h2>
+                <h2 style={styles.title}>
                   Withdraw Money
                 </h2>
 
-                <p>
-                  Choose your payment method
-                  and withdraw your earnings.
+                <p style={styles.description}>
+                  Choose your payment method and
+                  submit a withdrawal request.
                 </p>
               </div>
             </div>
 
-            {/* METHODS */}
+            {/* SAVED ACCOUNTS */}
 
-            <div className="methodGrid">
+            {savedAccounts.length > 0 && (
+              <div style={styles.savedSection}>
+                <div style={styles.savedHeader}>
+                  <div>
+                    <div style={styles.savedTitle}>
+                      Saved Payment Methods
+                    </div>
 
+                    <div
+                      style={styles.savedSubtitle}
+                    >
+                      Your details are saved for
+                      faster withdrawals.
+                    </div>
+                  </div>
+                </div>
+
+                <div style={styles.savedGrid}>
+                  {savedAccounts.map(
+                    (account) => (
+                      <div
+                        key={account.id}
+                        style={{
+                          ...styles.savedAccountCard,
+                          ...(method ===
+                          account.method
+                            ? styles.savedAccountActive
+                            : {}),
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            applySavedAccount(
+                              account
+                            )
+                          }
+                          style={
+                            styles.savedAccountMain
+                          }
+                        >
+                          <span
+                            style={
+                              styles.savedAccountIcon
+                            }
+                          >
+                            {account.method ===
+                            "upi"
+                              ? "📱"
+                              : "🏦"}
+                          </span>
+
+                          <span
+                            style={
+                              styles.savedAccountInfo
+                            }
+                          >
+                            <strong>
+                              {account.method ===
+                              "upi"
+                                ? "UPI"
+                                : "Bank Account"}
+                            </strong>
+
+                            <span>
+                              {account.account_name}
+                            </span>
+
+                            <span
+                              style={
+                                styles.savedAccountValue
+                              }
+                            >
+                              {account.method ===
+                              "upi"
+                                ? account.upi_id
+                                : `••••${(
+                                    account.account_number ||
+                                    ""
+                                  ).slice(-4)}`}
+                            </span>
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            editSavedAccount(
+                              account
+                            )
+                          }
+                          style={styles.editButton}
+                        >
+                          ✏️ Edit
+                        </button>
+                      </div>
+                    )
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* PAYMENT METHODS */}
+
+            <div style={styles.methodGrid}>
               <button
                 type="button"
-                className={
-                  method === "upi"
-                    ? "methodButton active"
-                    : "methodButton"
-                }
                 onClick={() =>
-                  handleMethodChange("upi")
+                  selectMethod("upi")
                 }
+                style={{
+                  ...styles.methodButton,
+                  ...(method === "upi"
+                    ? styles.methodActive
+                    : {}),
+                }}
               >
-                <span className="methodIcon">
+                <span
+                  style={styles.methodIcon}
+                >
                   📱
                 </span>
 
-                <span className="methodName">
-                  UPI
-                </span>
+                <span>UPI</span>
 
-                <small>
-                  Instant payout
-                </small>
+                {method === "upi" && (
+                  <span
+                    style={styles.selectedTick}
+                  >
+                    ✓
+                  </span>
+                )}
               </button>
 
               <button
                 type="button"
-                className={
-                  method === "bank"
-                    ? "methodButton active"
-                    : "methodButton"
-                }
                 onClick={() =>
-                  handleMethodChange("bank")
+                  selectMethod("bank")
                 }
+                style={{
+                  ...styles.methodButton,
+                  ...(method === "bank"
+                    ? styles.methodActive
+                    : {}),
+                }}
               >
-                <span className="methodIcon">
+                <span
+                  style={styles.methodIcon}
+                >
                   🏦
                 </span>
 
-                <span className="methodName">
-                  Bank
-                </span>
+                <span>Bank</span>
 
-                <small>
-                  Direct transfer
-                </small>
+                {method === "bank" && (
+                  <span
+                    style={styles.selectedTick}
+                  >
+                    ✓
+                  </span>
+                )}
               </button>
-
             </div>
 
-            {/* SAVED ACCOUNT */}
-
-            {savedCurrentAccount &&
-              !editingAccount && (
-                <div className="savedAccount">
-
-                  <div className="savedTop">
-
-                    <div className="savedTitleWrap">
-                      <div className="savedIcon">
-                        {method === "upi"
-                          ? "📱"
-                          : "🏦"}
-                      </div>
-
-                      <div>
-                        <strong>
-                          Saved{" "}
-                          {method === "upi"
-                            ? "UPI"
-                            : "Bank"}{" "}
-                          Account
-                        </strong>
-
-                        <span>
-                          Ready for withdrawal
-                        </span>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      className="editButton"
-                      onClick={() =>
-                        setEditingAccount(true)
-                      }
-                    >
-                      ✏️ Edit
-                    </button>
-
-                  </div>
-
-                  <div className="savedDetails">
-
-                    <div>
-                      <span>
-                        Account Name
-                      </span>
-
-                      <strong>
-                        {
-                          savedCurrentAccount.account_name
-                        }
-                      </strong>
-                    </div>
-
-                    {method === "upi" ? (
-                      <div>
-                        <span>
-                          UPI ID
-                        </span>
-
-                        <strong>
-                          {
-                            savedCurrentAccount.upi_id
-                          }
-                        </strong>
-                      </div>
-                    ) : (
-                      <>
-                        <div>
-                          <span>
-                            Bank
-                          </span>
-
-                          <strong>
-                            {
-                              savedCurrentAccount.bank_name
-                            }
-                          </strong>
-                        </div>
-
-                        <div>
-                          <span>
-                            Account Number
-                          </span>
-
-                          <strong>
-                            {
-                              savedCurrentAccount.account_number
-                            }
-                          </strong>
-                        </div>
-
-                        <div>
-                          <span>
-                            IFSC
-                          </span>
-
-                          <strong>
-                            {
-                              savedCurrentAccount.ifsc_code
-                            }
-                          </strong>
-                        </div>
-                      </>
-                    )}
-
-                  </div>
-
-                </div>
-              )}
+            {/* FORM */}
 
             <form
               onSubmit={submitWithdrawal}
             >
-
-              {/* AMOUNT */}
-
-              <label className="label">
+              <label style={styles.label}>
                 Withdrawal Amount
               </label>
 
-              <div className="amountWrap">
-
-                <span>₹</span>
+              <div style={styles.inputWrap}>
+                <span style={styles.rupee}>
+                  ₹
+                </span>
 
                 <input
                   type="number"
                   min={MIN_WITHDRAWAL}
+                  max={balance}
                   step="1"
                   inputMode="numeric"
-                  placeholder={`Minimum ₹${MIN_WITHDRAWAL}`}
+                  placeholder={`Enter amount (min ₹${MIN_WITHDRAWAL})`}
                   value={amount}
                   onChange={(e) =>
                     setAmount(
                       e.target.value
                     )
                   }
+                  style={styles.amountInput}
+                  disabled={submitting}
                 />
-
               </div>
 
-              <div className="amountHint">
-                You can withdraw up to ₹
+              <div
+                style={styles.amountHint}
+              >
+                Minimum ₹20 • Maximum ₹
                 {balance.toFixed(2)}
               </div>
 
-              {/* PAYMENT FORM */}
+              {/* UPI */}
 
-              {(!savedCurrentAccount ||
-                editingAccount) && (
-                <div className="paymentForm">
-
-                  <div className="formTitle">
-                    Payment Details
-                  </div>
-
-                  <label className="label">
+              {method === "upi" ? (
+                <>
+                  <label
+                    style={styles.label}
+                  >
                     Account Holder Name
                   </label>
 
                   <input
-                    className="input"
                     type="text"
                     placeholder="Enter account holder name"
                     value={accountName}
@@ -1132,137 +1009,151 @@ export default function WithdrawPage() {
                         e.target.value
                       )
                     }
+                    style={styles.input}
+                    autoComplete="name"
+                    disabled={submitting}
                   />
 
-                  {method === "upi" ? (
-                    <>
-                      <label className="label">
-                        UPI ID
-                      </label>
-
-                      <input
-                        className="input"
-                        type="text"
-                        placeholder="example@upi"
-                        value={upiId}
-                        onChange={(e) =>
-                          setUpiId(
-                            e.target.value
-                          )
-                        }
-                      />
-                    </>
-                  ) : (
-                    <>
-                      <label className="label">
-                        Bank Name
-                      </label>
-
-                      <input
-                        className="input"
-                        type="text"
-                        placeholder="Enter bank name"
-                        value={bankName}
-                        onChange={(e) =>
-                          setBankName(
-                            e.target.value
-                          )
-                        }
-                      />
-
-                      <label className="label">
-                        Account Number
-                      </label>
-
-                      <input
-                        className="input"
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="Enter account number"
-                        value={accountNumber}
-                        onChange={(e) =>
-                          setAccountNumber(
-                            e.target.value
-                          )
-                        }
-                      />
-
-                      <label className="label">
-                        IFSC Code
-                      </label>
-
-                      <input
-                        className="input"
-                        type="text"
-                        placeholder="SBIN0001234"
-                        value={ifscCode}
-                        onChange={(e) =>
-                          setIfscCode(
-                            e.target.value
-                              .toUpperCase()
-                          )
-                        }
-                      />
-                    </>
-                  )}
-
-                  <button
-                    type="button"
-                    className="saveButton"
-                    disabled={savingAccount}
-                    onClick={
-                      savePaymentAccount
-                    }
+                  <label
+                    style={styles.label}
                   >
-                    {savingAccount
-                      ? "Saving..."
-                      : editingAccount
-                      ? "Save Changes"
-                      : "Save Payment Details"}
-                  </button>
+                    UPI ID
+                  </label>
 
-                  {editingAccount && (
-                    <button
-                      type="button"
-                      className="cancelButton"
-                      onClick={() => {
-                        if (
-                          savedCurrentAccount
-                        ) {
-                          loadAccountIntoForm(
-                            savedCurrentAccount
-                          );
-                        } else {
-                          setEditingAccount(
-                            false
-                          );
-                        }
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  )}
+                  <input
+                    type="text"
+                    placeholder="example@upi"
+                    value={upiId}
+                    onChange={(e) =>
+                      setUpiId(
+                        e.target.value
+                      )
+                    }
+                    style={styles.input}
+                    autoComplete="off"
+                    disabled={submitting}
+                  />
+                </>
+              ) : (
+                <>
+                  {/* BANK */}
 
-                </div>
+                  <label
+                    style={styles.label}
+                  >
+                    Account Holder Name
+                  </label>
+
+                  <input
+                    type="text"
+                    placeholder="Enter account holder name"
+                    value={accountName}
+                    onChange={(e) =>
+                      setAccountName(
+                        e.target.value
+                      )
+                    }
+                    style={styles.input}
+                    autoComplete="name"
+                    disabled={submitting}
+                  />
+
+                  <label
+                    style={styles.label}
+                  >
+                    Account Number
+                  </label>
+
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="Enter account number"
+                    value={accountNumber}
+                    onChange={(e) =>
+                      setAccountNumber(
+                        e.target.value.replace(
+                          /\D/g,
+                          ""
+                        )
+                      )
+                    }
+                    style={styles.input}
+                    autoComplete="off"
+                    disabled={submitting}
+                  />
+
+                  <label
+                    style={styles.label}
+                  >
+                    IFSC Code
+                  </label>
+
+                  <input
+                    type="text"
+                    placeholder="Example: SBIN0001234"
+                    value={ifscCode}
+                    onChange={(e) =>
+                      setIfscCode(
+                        e.target.value
+                          .toUpperCase()
+                          .replace(
+                            /\s/g,
+                            ""
+                          )
+                      )
+                    }
+                    style={styles.input}
+                    autoComplete="off"
+                    disabled={submitting}
+                  />
+                </>
               )}
 
               {/* MESSAGE */}
 
               {message && (
                 <div
-                  className={
-                    isSuccess
-                      ? "message success"
-                      : "message error"
-                  }
+                  style={{
+                    ...styles.message,
+                    ...(messageType ===
+                    "success"
+                      ? styles.successMessage
+                      : messageType ===
+                        "error"
+                      ? styles.errorMessage
+                      : styles.infoMessage),
+                  }}
                 >
-                  <span>
-                    {isSuccess
+                  <span
+                    style={
+                      styles.messageIcon
+                    }
+                  >
+                    {messageType ===
+                    "success"
                       ? "✓"
-                      : "!"}
+                      : messageType ===
+                        "error"
+                      ? "!"
+                      : "i"}
                   </span>
 
-                  {message}
+                  <span>{message}</span>
+                </div>
+              )}
+
+              {/* EDIT NOTE */}
+
+              {editingAccount && (
+                <div
+                  style={styles.editingNote}
+                >
+                  ✏️ Editing saved{" "}
+                  {method === "upi"
+                    ? "UPI"
+                    : "bank"}{" "}
+                  details. Save the changes
+                  below.
                 </div>
               )}
 
@@ -1270,1651 +1161,1031 @@ export default function WithdrawPage() {
 
               <button
                 type="submit"
-                disabled={loading}
-                className="submitButton"
+                disabled={submitting}
+                style={{
+                  ...styles.submitButton,
+                  opacity: submitting
+                    ? 0.65
+                    : 1,
+                }}
               >
-                <span>
-                  {loading
-                    ? "Submitting Request..."
-                    : "Request Withdrawal"}
-                </span>
-
-                {!loading && (
-                  <span>→</span>
+                {submitting ? (
+                  <span
+                    style={
+                      styles.buttonLoading
+                    }
+                  >
+                    <span
+                      style={styles.smallLoader}
+                    />
+                    {editingAccount
+                      ? "Saving..."
+                      : "Submitting..."}
+                  </span>
+                ) : editingAccount ? (
+                  "Save Changes"
+                ) : (
+                  "Request Withdrawal"
                 )}
               </button>
 
-            </form>
+              {/* CANCEL EDIT */}
 
+              {editingAccount && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingAccount(
+                      false
+                    );
+                    setMessage("");
+
+                    const saved =
+                      savedAccounts.find(
+                        (account) =>
+                          account.method ===
+                          method
+                      );
+
+                    if (saved) {
+                      applySavedAccount(
+                        saved
+                      );
+                    }
+                  }}
+                  style={
+                    styles.cancelEditButton
+                  }
+                >
+                  Cancel Edit
+                </button>
+              )}
+            </form>
           </section>
 
-          {/* HISTORY */}
+          {/* RECENT WITHDRAWALS */}
 
-          <section className="card historyCard">
-
-            <div className="historyHeading">
-
+          <section style={styles.card}>
+            <div
+              style={
+                styles.historyHeader
+              }
+            >
               <div>
-                <h2>
+                <h2 style={styles.title}>
                   Recent Withdrawals
                 </h2>
 
-                <p>
-                  Track your withdrawal
-                  requests in real time.
+                <p
+                  style={
+                    styles.historySubtitle
+                  }
+                >
+                  Your latest withdrawal
+                  requests and their status.
                 </p>
               </div>
 
-              <div className="liveBadge">
-                <i />
-                Live
-              </div>
-
+              {withdrawals.length > 0 && (
+                <div
+                  style={
+                    styles.liveBadge
+                  }
+                >
+                  <span
+                    style={
+                      styles.liveDot
+                    }
+                  />
+                  Live
+                </div>
+              )}
             </div>
 
             {withdrawals.length === 0 ? (
-              <div className="empty">
-
-                <div className="emptyIcon">
+              <div style={styles.empty}>
+                <div
+                  style={styles.emptyIcon}
+                >
                   💸
                 </div>
 
-                <h3>
+                <strong>
                   No withdrawals yet
-                </h3>
+                </strong>
 
                 <p>
                   Your withdrawal requests
                   will appear here.
                 </p>
-
               </div>
             ) : (
-              <div className="historyList">
+              <div
+                style={
+                  styles.historyList
+                }
+              >
+                {withdrawals.map(
+                  (item, index) => {
+                    const state =
+                      getStatus(
+                        item.status
+                      );
 
-                {withdrawals.map((item) => {
-                  const status =
-                    getStatusInfo(
-                      item.status
-                    );
-
-                  return (
-                    <div
-                      key={item.id}
-                      className="historyItem"
-                    >
-
-                      <div className="historyLeft">
-
-                        <div className="historyIcon">
-                          {item.method
-                            .toLowerCase() ===
-                          "upi"
-                            ? "📱"
-                            : "🏦"}
-                        </div>
-
-                        <div className="historyInfo">
-
-                          <strong>
-                            ₹
-                            {Number(
-                              item.amount
-                            ).toFixed(2)}
-                          </strong>
-
-                          <span>
-                            {item.method.toUpperCase()}
-                            {" • "}
-                            {formatDate(
-                              item.created_at
-                            )}
-                            {" • "}
-                            {formatTime(
-                              item.created_at
-                            )}
-                          </span>
-
-                        </div>
-
-                      </div>
-
-                      <span
-                        className={`status ${status.className}`}
+                    return (
+                      <div
+                        key={item.id}
+                        style={{
+                          ...styles.historyRow,
+                          animationDelay: `${
+                            index * 40
+                          }ms`,
+                        }}
                       >
-                        <i>
-                          {status.icon}
-                        </i>
+                        <div
+                          style={
+                            styles.historyLeft
+                          }
+                        >
+                          <div
+                            style={{
+                              ...styles.historyIcon,
+                              ...statusIconStyle(
+                                item.status
+                              ),
+                            }}
+                          >
+                            {state.icon}
+                          </div>
 
-                        {status.label}
-                      </span>
+                          <div>
+                            <strong
+                              style={
+                                styles.historyAmount
+                              }
+                            >
+                              ₹
+                              {Number(
+                                item.amount
+                              ).toFixed(2)}
+                            </strong>
 
-                    </div>
-                  );
-                })}
+                            <div
+                              style={
+                                styles.historyDate
+                              }
+                            >
+                              {String(
+                                item.method
+                              ).toUpperCase()}{" "}
+                              •{" "}
+                              {new Date(
+                                item.created_at
+                              ).toLocaleDateString(
+                                "en-IN",
+                                {
+                                  day: "2-digit",
+                                  month:
+                                    "short",
+                                  year:
+                                    "numeric",
+                                }
+                              )}
+                            </div>
+                          </div>
+                        </div>
 
+                        <span
+                          style={{
+                            ...styles.status,
+                            ...statusStyle(
+                              item.status
+                            ),
+                          }}
+                        >
+                          {state.label}
+                        </span>
+                      </div>
+                    );
+                  }
+                )}
               </div>
             )}
-
           </section>
 
-          {/* SECURITY NOTE */}
-
-          <div className="securityNote">
-            <span>🔐</span>
+          <footer style={styles.footer}>
+            <div style={styles.footerBrand}>
+              AURA CAMP
+            </div>
 
             <div>
-              <strong>
-                Secure Withdrawal
-              </strong>
-
-              <p>
-                Your payment details are
-                protected and used only for
-                processing your withdrawal.
-              </p>
+              Secure Withdrawal •
+              Payments Protected
             </div>
-          </div>
-
-          <footer className="footer">
-            AURA CAMP • Secure Withdrawal
           </footer>
-
         </div>
-
       </main>
     </>
   );
 }
 
-const styles = `
-* {
-  box-sizing: border-box;
-}
+/* =========================================================
+   GLOBAL CSS
+========================================================= */
 
-html,
-body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  min-height: 100%;
-  overflow-x: hidden;
-}
-
-body {
-  background: #edf5f7;
-  color: #111827;
-
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-}
-
-button,
-input {
-  font: inherit;
-}
-
-button {
-  -webkit-tap-highlight-color: transparent;
-}
-
-button:active {
-  transform: scale(.98);
-}
-
-/* =====================================
-   PAGE
-===================================== */
-
-.page {
-  position: relative;
-
-  min-height: 100svh;
-
-  width: 100%;
-
-  padding:
-    10px
-    10px
-    30px;
-
-  overflow-x: hidden;
-
-  background:
-    linear-gradient(
-      145deg,
-      #effafb 0%,
-      #f7fbff 55%,
-      #faf7ff 100%
-    );
-}
-
-.container {
-  position: relative;
-  z-index: 2;
-
-  width: 100%;
-  max-width: 560px;
-
-  margin: 0 auto;
-}
-
-/* =====================================
-   GLOW
-===================================== */
-
-.glow {
-  position: fixed;
-
-  width: 240px;
-  height: 240px;
-
-  border-radius: 50%;
-
-  filter: blur(80px);
-
-  pointer-events: none;
-
-  z-index: 0;
-}
-
-.glowOne {
-  top: -110px;
-  left: -100px;
-
-  background:
-    rgba(37,99,235,.07);
-}
-
-.glowTwo {
-  right: -130px;
-  bottom: -130px;
-
-  background:
-    rgba(22,163,74,.055);
-}
-
-/* =====================================
-   HEADER
-===================================== */
-
-.header {
-  width: 100%;
-
-  min-height: 72px;
-
-  margin-bottom: 11px;
-
-  padding: 11px 12px;
-
-  display: grid;
-
-  grid-template-columns:
-    78px
-    1fr
-    48px;
-
-  align-items: center;
-
-  gap: 7px;
-
-  border-radius: 22px;
-
-  background:
-    linear-gradient(
-      145deg,
-      #142331,
-      #173847
-    );
-
-  color: white;
-
-  box-shadow:
-    0 13px 35px
-    rgba(20,55,70,.17);
-
-  animation:
-    pageDown .45s ease both;
-}
-
-@keyframes pageDown {
-  from {
-    opacity: 0;
-    transform: translateY(-8px);
+const globalStyles = `
+  * {
+    box-sizing: border-box;
   }
 
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.headerCenter {
-  text-align: center;
-}
-
-.brand {
-  font-family: Georgia, serif;
-
-  font-size: 24px;
-
-  line-height: 1;
-
-  letter-spacing: -.8px;
-
-  white-space: nowrap;
-}
-
-.brand span {
-  color: #fff;
-}
-
-.brand b {
-  color: #35b979;
-
-  font-weight: 500;
-}
-
-.subtitle {
-  margin-top: 4px;
-
-  color:
-    rgba(255,255,255,.68);
-
-  font-family: Georgia, serif;
-
-  font-size: 10px;
-}
-
-.backButton {
-  height: 40px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  gap: 6px;
-
-  border:
-    1px solid
-    rgba(255,255,255,.25);
-
-  border-radius: 12px;
-
-  background:
-    rgba(255,255,255,.04);
-
-  color: white;
-
-  font-family: Georgia, serif;
-
-  font-size: 11px;
-
-  cursor: pointer;
-}
-
-.backButton span {
-  font-size: 15px;
-}
-
-.headerShield {
-  width: 42px;
-  height: 42px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  border-radius: 13px;
-
-  background:
-    rgba(255,255,255,.09);
-
-  font-size: 15px;
-}
-
-/* =====================================
-   BALANCE
-===================================== */
-
-.balanceCard {
-  width: 100%;
-
-  margin-bottom: 11px;
-
-  padding: 20px;
-
-  border-radius: 23px;
-
-  color: white;
-
-  background:
-    linear-gradient(
-      135deg,
-      #14546a 0%,
-      #126070 52%,
-      #167352 100%
-    );
-
-  box-shadow:
-    0 15px 35px
-    rgba(17,84,102,.18);
-
-  animation:
-    cardUp .5s .04s ease both;
-}
-
-@keyframes cardUp {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
+  html {
+    scroll-behavior: smooth;
   }
 
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.balanceTop {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-
-  gap: 12px;
-}
-
-.balanceLabel {
-  display: block;
-
-  color:
-    rgba(255,255,255,.76);
-
-  font-family: Georgia, serif;
-
-  font-size: 12px;
-}
-
-.balance {
-  display: block;
-
-  margin-top: 4px;
-
-  font-family: Georgia, serif;
-
-  font-size: 39px;
-
-  line-height: 1;
-
-  font-weight: 500;
-
-  letter-spacing: -1.5px;
-}
-
-.balanceIcon {
-  width: 48px;
-  height: 48px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  border-radius: 15px;
-
-  background:
-    rgba(255,255,255,.12);
-
-  font-family: Georgia, serif;
-
-  font-size: 20px;
-}
-
-.balanceBottom {
-  margin-top: 23px;
-
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-
-  gap: 8px;
-
-  font-family: Georgia, serif;
-
-  font-size: 9px;
-
-  color:
-    rgba(255,255,255,.73);
-}
-
-.balanceBottom strong {
-  margin-left: 4px;
-
-  color: white;
-
-  font-weight: 600;
-}
-
-.walletReady {
-  padding: 6px 8px;
-
-  border-radius: 999px;
-
-  background:
-    rgba(255,255,255,.10);
-
-  color: #c8f7df;
-
-  font-family:
-    Inter,
-    sans-serif;
-
-  font-size: 7px;
-
-  font-weight: 800;
-}
-
-/* =====================================
-   CARD
-===================================== */
-
-.card {
-  width: 100%;
-
-  margin-bottom: 11px;
-
-  padding: 17px;
-
-  border:
-    1px solid #dfe8eb;
-
-  border-radius: 22px;
-
-  background:
-    rgba(255,255,255,.97);
-
-  box-shadow:
-    0 9px 27px
-    rgba(20,60,80,.055);
-
-  animation:
-    cardUp .5s .08s ease both;
-}
-
-.cardHeading {
-  display: flex;
-  align-items: center;
-
-  gap: 10px;
-
-  margin-bottom: 14px;
-}
-
-.headingIcon {
-  width: 43px;
-  height: 43px;
-
-  min-width: 43px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  border-radius: 14px;
-
-  background:
-    linear-gradient(
-      135deg,
-      #edf4ff,
-      #ecfdf5
-    );
-
-  font-size: 18px;
-}
-
-.cardHeading h2,
-.historyHeading h2 {
-  margin: 0;
-
-  font-family: Georgia, serif;
-
-  font-size: 20px;
-
-  font-weight: 500;
-
-  color: #111827;
-}
-
-.cardHeading p,
-.historyHeading p {
-  margin: 4px 0 0;
-
-  color: #7b8790;
-
-  font-family: Georgia, serif;
-
-  font-size: 9px;
-
-  line-height: 1.4;
-}
-
-/* =====================================
-   METHOD
-===================================== */
-
-.methodGrid {
-  display: grid;
-
-  grid-template-columns:
-    repeat(2, minmax(0,1fr));
-
-  gap: 9px;
-
-  margin-bottom: 13px;
-}
-
-.methodButton {
-  min-width: 0;
-
-  min-height: 88px;
-
-  padding: 11px;
-
-  display: flex;
-  flex-direction: column;
-
-  align-items: center;
-  justify-content: center;
-
-  border:
-    1px solid #e1e8eb;
-
-  border-radius: 17px;
-
-  background: #f9fbfc;
-
-  color: #374151;
-
-  cursor: pointer;
-
-  transition:
-    transform .18s ease,
-    border-color .18s ease,
-    background .18s ease,
-    box-shadow .18s ease;
-}
-
-.methodButton.active {
-  border:
-    2px solid #1b65e8;
-
-  background:
-    linear-gradient(
-      145deg,
-      #f0f5ff,
-      #f3fbff
-    );
-
-  color: #155eef;
-
-  box-shadow:
-    0 8px 22px
-    rgba(37,99,235,.10);
-}
-
-.methodIcon {
-  font-size: 23px;
-
-  line-height: 1;
-}
-
-.methodName {
-  margin-top: 6px;
-
-  font-family: Georgia, serif;
-
-  font-size: 12px;
-
-  font-weight: 600;
-}
-
-.methodButton small {
-  margin-top: 3px;
-
-  color: #9aa6ae;
-
-  font-size: 7px;
-}
-
-/* =====================================
-   SAVED ACCOUNT
-===================================== */
-
-.savedAccount {
-  margin-bottom: 15px;
-
-  padding: 13px;
-
-  border:
-    1px solid #bcebd0;
-
-  border-radius: 17px;
-
-  background:
-    linear-gradient(
-      145deg,
-      #f0fff6,
-      #f8fffb
-    );
-
-  animation:
-    fadeIn .25s ease both;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
+  body {
+    margin: 0;
+    padding: 0;
+    background: #f4f9fb;
+    color: #101827;
   }
 
-  to {
-    opacity: 1;
-  }
-}
-
-.savedTop {
-  display: flex;
-
-  align-items: center;
-  justify-content: space-between;
-
-  gap: 8px;
-
-  margin-bottom: 10px;
-}
-
-.savedTitleWrap {
-  min-width: 0;
-
-  display: flex;
-  align-items: center;
-
-  gap: 8px;
-}
-
-.savedIcon {
-  width: 37px;
-  height: 37px;
-
-  min-width: 37px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  border-radius: 12px;
-
-  background: #fff;
-
-  font-size: 16px;
-}
-
-.savedTitleWrap strong {
-  display: block;
-
-  color: #137044;
-
-  font-family: Georgia, serif;
-
-  font-size: 11px;
-}
-
-.savedTitleWrap span {
-  display: block;
-
-  margin-top: 2px;
-
-  color: #6b907b;
-
-  font-size: 7px;
-}
-
-.editButton {
-  flex-shrink: 0;
-
-  padding: 8px 9px;
-
-  border:
-    1px solid #94e4b5;
-
-  border-radius: 10px;
-
-  background: white;
-
-  color: #147447;
-
-  font-size: 8px;
-
-  font-weight: 800;
-
-  cursor: pointer;
-}
-
-.savedDetails {
-  padding: 8px 10px;
-
-  border-radius: 12px;
-
-  background: white;
-}
-
-.savedDetails > div {
-  min-width: 0;
-
-  padding: 7px 0;
-
-  display: flex;
-  justify-content: space-between;
-
-  gap: 12px;
-
-  border-bottom:
-    1px solid #edf7f1;
-}
-
-.savedDetails > div:last-child {
-  border-bottom: none;
-}
-
-.savedDetails span {
-  color: #71808a;
-
-  font-size: 8px;
-}
-
-.savedDetails strong {
-  max-width: 62%;
-
-  overflow-wrap: anywhere;
-
-  text-align: right;
-
-  color: #25313a;
-
-  font-size: 8px;
-}
-
-/* =====================================
-   FORM
-===================================== */
-
-.label {
-  display: block;
-
-  margin:
-    13px
-    0
-    6px;
-
-  color: #34404a;
-
-  font-family: Georgia, serif;
-
-  font-size: 10px;
-
-  font-weight: 600;
-}
-
-.amountWrap {
-  width: 100%;
-
-  display: flex;
-  align-items: center;
-
-  border:
-    1px solid #d7e0e4;
-
-  border-radius: 13px;
-
-  background: #fff;
-
-  transition:
-    border-color .18s ease,
-    box-shadow .18s ease;
-}
-
-.amountWrap:focus-within {
-  border-color: #2771e8;
-
-  box-shadow:
-    0 0 0 3px
-    rgba(39,113,232,.08);
-}
-
-.amountWrap > span {
-  padding-left: 13px;
-
-  color: #66747d;
-
-  font-family: Georgia, serif;
-
-  font-size: 17px;
-
-  font-weight: 700;
-}
-
-.amountWrap input {
-  width: 100%;
-
-  min-width: 0;
-
-  padding:
-    13px
-    10px;
-
-  border: none;
-  outline: none;
-
-  background: transparent;
-
-  color: #111827;
-
-  font-family: Georgia, serif;
-
-  font-size: 17px;
-}
-
-.amountHint {
-  margin-top: 5px;
-
-  color: #9aa6ae;
-
-  font-size: 7px;
-}
-
-.input {
-  width: 100%;
-
-  min-width: 0;
-
-  padding: 12px;
-
-  border:
-    1px solid #d7e0e4;
-
-  border-radius: 12px;
-
-  outline: none;
-
-  background: #fff;
-
-  color: #111827;
-
-  font-size: 11px;
-
-  transition:
-    border-color .18s ease,
-    box-shadow .18s ease;
-}
-
-.input:focus {
-  border-color: #2771e8;
-
-  box-shadow:
-    0 0 0 3px
-    rgba(39,113,232,.08);
-}
-
-.paymentForm {
-  margin-top: 8px;
-}
-
-.formTitle {
-  margin-top: 14px;
-
-  color: #16212a;
-
-  font-family: Georgia, serif;
-
-  font-size: 12px;
-
-  font-weight: 600;
-}
-
-.saveButton,
-.cancelButton {
-  width: 100%;
-
-  margin-top: 10px;
-
-  padding: 11px;
-
-  border: none;
-
-  border-radius: 12px;
-
-  font-size: 9px;
-
-  font-weight: 800;
-
-  cursor: pointer;
-}
-
-.saveButton {
-  background:
-    linear-gradient(
-      90deg,
-      #155eef,
-      #2578d9
-    );
-
-  color: white;
-}
-
-.cancelButton {
-  background: #f1f4f6;
-
-  color: #52616a;
-}
-
-/* =====================================
-   MESSAGE
-===================================== */
-
-.message {
-  margin-top: 13px;
-
-  padding: 10px 11px;
-
-  display: flex;
-  align-items: center;
-
-  gap: 8px;
-
-  border-radius: 11px;
-
-  font-size: 9px;
-
-  line-height: 1.4;
-
-  animation:
-    fadeIn .2s ease both;
-}
-
-.message > span {
-  width: 20px;
-  height: 20px;
-
-  min-width: 20px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  border-radius: 50%;
-
-  font-weight: 900;
-}
-
-.message.success {
-  background: #ecfdf5;
-  color: #137044;
-}
-
-.message.success > span {
-  background: #c9f7dc;
-}
-
-.message.error {
-  background: #fff1f2;
-  color: #b42318;
-}
-
-.message.error > span {
-  background: #ffd7dc;
-}
-
-/* =====================================
-   SUBMIT
-===================================== */
-
-.submitButton {
-  width: 100%;
-
-  margin-top: 14px;
-
-  padding: 13px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  gap: 9px;
-
-  border: none;
-
-  border-radius: 13px;
-
-  background:
-    linear-gradient(
-      135deg,
-      #153746,
-      #176056
-    );
-
-  color: white;
-
-  font-family: Georgia, serif;
-
-  font-size: 12px;
-
-  cursor: pointer;
-
-  box-shadow:
-    0 9px 22px
-    rgba(21,55,70,.15);
-
-  transition:
-    transform .18s ease,
-    box-shadow .18s ease;
-}
-
-.submitButton:hover {
-  box-shadow:
-    0 12px 27px
-    rgba(21,55,70,.22);
-}
-
-.submitButton:disabled {
-  opacity: .58;
-
-  cursor: not-allowed;
-}
-
-/* =====================================
-   HISTORY
-===================================== */
-
-.historyCard {
-  animation-delay: .12s;
-}
-
-.historyHeading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-
-  gap: 8px;
-
-  margin-bottom: 12px;
-}
-
-.liveBadge {
-  flex-shrink: 0;
-
-  display: flex;
-  align-items: center;
-
-  gap: 4px;
-
-  padding: 6px 8px;
-
-  border-radius: 999px;
-
-  background: #ecfdf5;
-
-  color: #07804b;
-
-  font-size: 7px;
-
-  font-weight: 900;
-}
-
-.liveBadge i {
-  width: 5px;
-  height: 5px;
-
-  border-radius: 50%;
-
-  background: #16a34a;
-
-  animation:
-    livePulse 1.6s infinite;
-}
-
-@keyframes livePulse {
-  0%,
-  100% {
-    opacity: 1;
+  button,
+  input {
+    font-family: inherit;
   }
 
-  50% {
-    opacity: .35;
-  }
-}
-
-.historyList {
-  width: 100%;
-}
-
-.historyItem {
-  width: 100%;
-
-  padding: 11px 0;
-
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-
-  gap: 9px;
-
-  border-bottom:
-    1px solid #edf1f3;
-}
-
-.historyItem:last-child {
-  border-bottom: none;
-}
-
-.historyLeft {
-  min-width: 0;
-  flex: 1;
-
-  display: flex;
-  align-items: center;
-
-  gap: 9px;
-}
-
-.historyIcon {
-  width: 39px;
-  height: 39px;
-
-  min-width: 39px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  border-radius: 12px;
-
-  background:
-    linear-gradient(
-      145deg,
-      #f1f6ff,
-      #f0fbf7
-    );
-
-  font-size: 16px;
-}
-
-.historyInfo {
-  min-width: 0;
-}
-
-.historyInfo strong {
-  display: block;
-
-  color: #111827;
-
-  font-family: Georgia, serif;
-
-  font-size: 14px;
-}
-
-.historyInfo span {
-  display: block;
-
-  margin-top: 3px;
-
-  color: #8b98a0;
-
-  font-size: 7px;
-}
-
-.status {
-  flex-shrink: 0;
-
-  min-width: 61px;
-
-  padding: 6px 7px;
-
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-
-  gap: 4px;
-
-  border-radius: 999px;
-
-  font-size: 7px;
-
-  font-weight: 900;
-}
-
-.status i {
-  font-style: normal;
-
-  font-size: 9px;
-}
-
-.statusPaid {
-  background: #ecfdf5;
-  color: #087443;
-}
-
-.statusPending {
-  background: #fff8db;
-  color: #9a6700;
-}
-
-.statusRejected {
-  background: #fff1f0;
-  color: #b42318;
-}
-
-/* =====================================
-   EMPTY
-===================================== */
-
-.empty {
-  padding: 23px 8px;
-
-  text-align: center;
-}
-
-.emptyIcon {
-  width: 51px;
-  height: 51px;
-
-  margin: 0 auto 9px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  border-radius: 16px;
-
-  background:
-    linear-gradient(
-      145deg,
-      #edf4ff,
-      #f4efff
-    );
-
-  font-size: 23px;
-}
-
-.empty h3 {
-  margin: 0;
-
-  color: #27333b;
-
-  font-family: Georgia, serif;
-
-  font-size: 14px;
-}
-
-.empty p {
-  margin: 5px 0 0;
-
-  color: #9aa6ae;
-
-  font-size: 8px;
-}
-
-/* =====================================
-   SECURITY
-===================================== */
-
-.securityNote {
-  width: 100%;
-
-  margin:
-    3px
-    0
-    10px;
-
-  padding: 12px;
-
-  display: flex;
-  align-items: flex-start;
-
-  gap: 9px;
-
-  border:
-    1px solid #dfe9e9;
-
-  border-radius: 15px;
-
-  background:
-    rgba(255,255,255,.65);
-}
-
-.securityNote > span {
-  font-size: 17px;
-}
-
-.securityNote strong {
-  display: block;
-
-  color: #42515a;
-
-  font-size: 8px;
-}
-
-.securityNote p {
-  margin: 3px 0 0;
-
-  color: #89959d;
-
-  font-size: 7px;
-
-  line-height: 1.4;
-}
-
-/* =====================================
-   FOOTER
-===================================== */
-
-.footer {
-  padding: 8px 3px 5px;
-
-  text-align: center;
-
-  color: #9aa6ae;
-
-  font-family: Georgia, serif;
-
-  font-size: 8px;
-}
-
-/* =====================================
-   LOADING
-===================================== */
-
-.loadingPage {
-  width: 100%;
-
-  min-height: 100svh;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  padding: 20px;
-
-  background:
-    linear-gradient(
-      145deg,
-      #effafb,
-      #f7fbff,
-      #faf7ff
-    );
-}
-
-.loadingCard {
-  width: min(290px, 100%);
-
-  padding: 29px 22px;
-
-  border-radius: 23px;
-
-  background: white;
-
-  text-align: center;
-
-  box-shadow:
-    0 20px 60px
-    rgba(20,60,80,.10);
-}
-
-.loadingBrand {
-  font-family: Georgia, serif;
-
-  font-size: 24px;
-}
-
-.loadingBrand span {
-  color: #111827;
-}
-
-.loadingBrand b {
-  color: #209657;
-
-  font-weight: 500;
-}
-
-.loadingSpinner {
-  width: 28px;
-  height: 28px;
-
-  margin: 18px auto 11px;
-
-  border:
-    3px solid #e7edf0;
-
-  border-top-color: #155eef;
-  border-right-color: #1a9b64;
-
-  border-radius: 50%;
-
-  animation:
-    spin .75s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.loadingCard p {
-  margin: 0;
-
-  color: #87939a;
-
-  font-size: 9px;
-}
-
-/* =====================================
-   SMALL MOBILE
-===================================== */
-
-@media (max-width: 370px) {
-
-  .page {
-    padding-left: 7px;
-    padding-right: 7px;
+  button {
+    -webkit-tap-highlight-color: transparent;
   }
 
-  .header {
-    grid-template-columns:
-      70px
-      1fr
-      40px;
-
-    padding: 9px;
+  input:focus {
+    border-color: #173bff !important;
+    box-shadow: 0 0 0 3px rgba(23,59,255,.08);
   }
 
-  .brand {
-    font-size: 21px;
+  button:active {
+    transform: scale(.98);
   }
 
-  .backButton {
-    font-size: 9px;
+  @keyframes fadeUp {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
-  .headerShield {
-    width: 37px;
-    height: 37px;
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
   }
 
-  .balanceCard {
-    padding: 17px;
+  @keyframes pulse {
+    0%, 100% {
+      opacity: .45;
+    }
+
+    50% {
+      opacity: 1;
+    }
   }
 
-  .balance {
-    font-size: 35px;
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
-  .card {
-    padding: 14px;
+  @keyframes historyIn {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
-  .cardHeading h2,
-  .historyHeading h2 {
-    font-size: 18px;
+  @media (max-width: 480px) {
+    .withdraw-container {
+      width: 100%;
+    }
   }
-
-  .methodButton {
-    min-height: 82px;
-  }
-
-  .methodIcon {
-    font-size: 21px;
-  }
-
-  .historyInfo strong {
-    font-size: 13px;
-  }
-
-  .status {
-    min-width: 55px;
-    padding-left: 5px;
-    padding-right: 5px;
-  }
-}
-
-/* =====================================
-   DESKTOP — APP STYLE
-===================================== */
-
-@media (min-width: 700px) {
-
-  .page {
-    padding-top: 25px;
-    padding-bottom: 45px;
-  }
-
-  .container {
-    max-width: 620px;
-  }
-
-  .header {
-    min-height: 80px;
-  }
-
-  .balanceCard {
-    padding: 24px;
-  }
-
-  .card {
-    padding: 21px;
-  }
-}
 `;
+
+/* =========================================================
+   STYLES
+========================================================= */
+
+const styles: Record<
+  string,
+  React.CSSProperties
+> = {
+  page: {
+    minHeight: "100vh",
+    position: "relative",
+    overflowX: "hidden",
+    background:
+      "linear-gradient(180deg,#f2fbfd 0%,#f7f9ff 48%,#f4f8fb 100%)",
+    padding:
+      "20px 14px 46px",
+    fontFamily:
+      "Georgia, 'Times New Roman', serif",
+    color: "#101827",
+  },
+
+  backgroundGlowOne: {
+    position: "fixed",
+    width: "260px",
+    height: "260px",
+    borderRadius: "50%",
+    background:
+      "rgba(56,189,248,.08)",
+    filter: "blur(70px)",
+    top: "-100px",
+    left: "-100px",
+    pointerEvents: "none",
+  },
+
+  backgroundGlowTwo: {
+    position: "fixed",
+    width: "300px",
+    height: "300px",
+    borderRadius: "50%",
+    background:
+      "rgba(99,102,241,.06)",
+    filter: "blur(80px)",
+    bottom: "-130px",
+    right: "-130px",
+    pointerEvents: "none",
+  },
+
+  container: {
+    width: "100%",
+    maxWidth: "650px",
+    margin: "0 auto",
+    position: "relative",
+    zIndex: 1,
+  },
+
+  loadingBox: {
+    minHeight: "80vh",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "14px",
+  },
+
+  loadingLogo: {
+    fontSize: "28px",
+    letterSpacing: "-1px",
+    fontWeight: 700,
+  },
+
+  loadingLogoSpan: {
+    color: "#1c9b61",
+  },
+
+  loader: {
+    width: "28px",
+    height: "28px",
+    borderRadius: "50%",
+    border:
+      "3px solid rgba(23,59,255,.15)",
+    borderTopColor: "#173bff",
+    animation:
+      "spin .8s linear infinite",
+  },
+
+  smallLoader: {
+    width: "15px",
+    height: "15px",
+    borderRadius: "50%",
+    border:
+      "2px solid rgba(255,255,255,.35)",
+    borderTopColor: "#fff",
+    animation:
+      "spin .7s linear infinite",
+  },
+
+  loadingText: {
+    color: "#7b8794",
+    fontSize: "13px",
+  },
+
+  header: {
+    background:
+      "linear-gradient(135deg,#101827,#152237)",
+    color: "#fff",
+    borderRadius: "22px",
+    padding: "16px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: "78px",
+    marginBottom: "16px",
+    boxShadow:
+      "0 15px 35px rgba(16,24,39,.12)",
+    animation:
+      "fadeUp .45s ease both",
+  },
+
+  headerCenter: {
+    textAlign: "center",
+    flex: 1,
+  },
+
+  headerSpacer: {
+    width: "72px",
+  },
+
+  backButton: {
+    width: "72px",
+    background:
+      "rgba(255,255,255,.04)",
+    border:
+      "1px solid rgba(255,255,255,.25)",
+    color: "#fff",
+    borderRadius: "12px",
+    padding: "10px 7px",
+    cursor: "pointer",
+    fontSize: "14px",
+    fontWeight: 700,
+  },
+
+  brand: {
+    fontSize: "22px",
+    fontWeight: 700,
+    letterSpacing: ".3px",
+  },
+
+  subtitle: {
+    fontSize: "12px",
+    opacity: .7,
+    marginTop: "3px",
+  },
+
+  balanceCard: {
+    background:
+      "linear-gradient(135deg,#102f43 0%,#105d62 52%,#13795c 100%)",
+    color: "#fff",
+    borderRadius: "25px",
+    padding: "25px",
+    marginBottom: "16px",
+    boxShadow:
+      "0 18px 38px rgba(16,59,67,.18)",
+    overflow: "hidden",
+    position: "relative",
+    animation:
+      "fadeUp .5s ease .05s both",
+  },
+
+  balanceTop: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: "18px",
+  },
+
+  balanceLabel: {
+    fontSize: "15px",
+    opacity: .8,
+    marginBottom: "7px",
+  },
+
+  balance: {
+    fontSize: "40px",
+    fontWeight: 700,
+    lineHeight: 1.05,
+    letterSpacing: "-1px",
+  },
+
+  balanceHint: {
+    fontSize: "13px",
+    opacity: .72,
+    marginTop: "10px",
+  },
+
+  balanceIcon: {
+    width: "62px",
+    height: "62px",
+    borderRadius: "20px",
+    background:
+      "rgba(255,255,255,.12)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "27px",
+    flexShrink: 0,
+  },
+
+  card: {
+    background:
+      "rgba(255,255,255,.94)",
+    border:
+      "1px solid rgba(213,225,229,.9)",
+    borderRadius: "24px",
+    padding: "21px",
+    marginBottom: "16px",
+    boxShadow:
+      "0 9px 28px rgba(30,55,70,.055)",
+    animation:
+      "fadeUp .5s ease .1s both",
+  },
+
+  sectionHeader: {
+    marginBottom: "4px",
+  },
+
+  title: {
+    margin: 0,
+    fontSize: "25px",
+    fontWeight: 700,
+    letterSpacing: "-.5px",
+  },
+
+  description: {
+    color: "#77828c",
+    fontSize: "13px",
+    lineHeight: 1.55,
+    margin:
+      "7px 0 0",
+    fontFamily:
+      "Georgia, 'Times New Roman', serif",
+  },
+
+  savedSection: {
+    marginTop: "18px",
+    marginBottom: "5px",
+    padding: "14px",
+    background:
+      "linear-gradient(135deg,#f8fbfc,#f8faff)",
+    border:
+      "1px solid #e3e9ed",
+    borderRadius: "17px",
+  },
+
+  savedHeader: {
+    marginBottom: "11px",
+  },
+
+  savedTitle: {
+    fontSize: "14px",
+    fontWeight: 800,
+    color: "#182333",
+  },
+
+  savedSubtitle: {
+    marginTop: "3px",
+    fontSize: "11px",
+    color: "#7d8790",
+    lineHeight: 1.4,
+  },
+
+  savedGrid: {
+    display: "grid",
+    gap: "9px",
+  },
+
+  savedAccountCard: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "8px",
+    background: "#fff",
+    border:
+      "1px solid #e5e9ee",
+    borderRadius: "13px",
+    padding: "9px",
+    transition:
+      "all .2s ease",
+  },
+
+  savedAccountActive: {
+    border:
+      "2px solid #173bff",
+    background: "#f2f5ff",
+  },
+
+  savedAccountMain: {
+    flex: 1,
+    minWidth: 0,
+    display: "flex",
+    alignItems: "center",
+    gap: "9px",
+    border: "none",
+    background: "transparent",
+    padding: 0,
+    textAlign: "left",
+    cursor: "pointer",
+  },
+
+  savedAccountIcon: {
+    width: "39px",
+    height: "39px",
+    borderRadius: "11px",
+    background: "#f1f5f9",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    fontSize: "19px",
+  },
+
+  savedAccountInfo: {
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: "2px",
+    fontSize: "12px",
+  },
+
+  savedAccountValue: {
+    color: "#78838e",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    maxWidth: "185px",
+  },
+
+  editButton: {
+    flexShrink: 0,
+    border:
+      "1px solid #cbd8ff",
+    background: "#eef2ff",
+    color: "#173bff",
+    borderRadius: "10px",
+    padding: "8px 10px",
+    fontSize: "11px",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+
+  methodGrid: {
+    display: "grid",
+    gridTemplateColumns:
+      "1fr 1fr",
+    gap: "10px",
+    margin:
+      "20px 0 18px",
+  },
+
+  methodButton: {
+    minHeight: "82px",
+    position: "relative",
+    background: "#fafbfd",
+    border:
+      "1px solid #e2e7ec",
+    borderRadius: "15px",
+    padding: "12px",
+    fontWeight: 700,
+    cursor: "pointer",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "4px",
+    color: "#202936",
+    fontSize: "14px",
+  },
+
+  methodActive: {
+    background:
+      "linear-gradient(135deg,#eef3ff,#f5f7ff)",
+    border:
+      "2px solid #173bff",
+    color: "#173bff",
+    boxShadow:
+      "0 7px 20px rgba(23,59,255,.08)",
+  },
+
+  methodIcon: {
+    fontSize: "23px",
+    lineHeight: 1,
+  },
+
+  selectedTick: {
+    position: "absolute",
+    top: "7px",
+    right: "8px",
+    width: "19px",
+    height: "19px",
+    borderRadius: "50%",
+    background: "#173bff",
+    color: "#fff",
+    fontSize: "11px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  label: {
+    display: "block",
+    fontSize: "13px",
+    fontWeight: 700,
+    margin:
+      "15px 0 7px",
+    color: "#26313e",
+  },
+
+  inputWrap: {
+    display: "flex",
+    alignItems: "center",
+    border:
+      "1px solid #d5dbe1",
+    borderRadius: "13px",
+    overflow: "hidden",
+    background: "#fff",
+    transition:
+      "all .2s ease",
+  },
+
+  rupee: {
+    paddingLeft: "14px",
+    fontWeight: 700,
+    color: "#697580",
+    fontSize: "18px",
+  },
+
+  amountInput: {
+    width: "100%",
+    border: "none",
+    outline: "none",
+    padding: "14px 12px",
+    fontSize: "17px",
+    background: "transparent",
+    color: "#101827",
+    fontFamily:
+      "Georgia, 'Times New Roman', serif",
+  },
+
+  amountHint: {
+    marginTop: "6px",
+    fontSize: "11px",
+    color: "#89939c",
+  },
+
+  input: {
+    width: "100%",
+    boxSizing: "border-box",
+    border:
+      "1px solid #d5dbe1",
+    borderRadius: "13px",
+    padding: "14px",
+    fontSize: "14px",
+    outline: "none",
+    background: "#fff",
+    color: "#101827",
+    transition:
+      "all .2s ease",
+  },
+
+  message: {
+    marginTop: "15px",
+    padding: "12px 13px",
+    borderRadius: "12px",
+    fontSize: "12px",
+    lineHeight: 1.45,
+    display: "flex",
+    alignItems: "center",
+    gap: "9px",
+    animation:
+      "fadeIn .25s ease both",
+  },
+
+  messageIcon: {
+    width: "21px",
+    height: "21px",
+    borderRadius: "50%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    fontWeight: 800,
+  },
+
+  successMessage: {
+    color: "#166534",
+    background: "#ecfdf5",
+    border:
+      "1px solid #bbf7d0",
+  },
+
+  errorMessage: {
+    color: "#b91c1c",
+    background: "#fef2f2",
+    border:
+      "1px solid #fecaca",
+  },
+
+  infoMessage: {
+    color: "#3730a3",
+    background: "#eef2ff",
+    border:
+      "1px solid #c7d2fe",
+  },
+
+  editingNote: {
+    marginTop: "12px",
+    padding: "11px 12px",
+    borderRadius: "11px",
+    background: "#fff7ed",
+    border:
+      "1px solid #fed7aa",
+    color: "#9a3412",
+    fontSize: "11px",
+    lineHeight: 1.45,
+  },
+
+  submitButton: {
+    width: "100%",
+    marginTop: "18px",
+    minHeight: "50px",
+    background:
+      "linear-gradient(135deg,#101827,#16283b)",
+    color: "#fff",
+    border: "none",
+    borderRadius: "13px",
+    padding: "14px",
+    fontWeight: 700,
+    fontSize: "15px",
+    cursor: "pointer",
+    boxShadow:
+      "0 10px 22px rgba(16,24,39,.15)",
+    transition:
+      "all .2s ease",
+  },
+
+  buttonLoading: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "9px",
+  },
+
+  cancelEditButton: {
+    width: "100%",
+    marginTop: "9px",
+    background: "transparent",
+    color: "#6b7280",
+    border:
+      "1px solid #e1e5e9",
+    borderRadius: "12px",
+    padding: "12px",
+    fontWeight: 700,
+    fontSize: "13px",
+    cursor: "pointer",
+  },
+
+  historyHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: "10px",
+    marginBottom: "10px",
+  },
+
+  historySubtitle: {
+    margin:
+      "6px 0 0",
+    color: "#7b8791",
+    fontSize: "12px",
+    lineHeight: 1.45,
+  },
+
+  liveBadge: {
+    display: "flex",
+    alignItems: "center",
+    gap: "5px",
+    padding: "5px 8px",
+    borderRadius: "20px",
+    background: "#ecfdf5",
+    border:
+      "1px solid #bbf7d0",
+    color: "#15803d",
+    fontSize: "10px",
+    fontWeight: 800,
+    flexShrink: 0,
+  },
+
+  liveDot: {
+    width: "6px",
+    height: "6px",
+    borderRadius: "50%",
+    background: "#22c55e",
+    animation:
+      "pulse 1.5s ease-in-out infinite",
+  },
+
+  historyList: {
+    marginTop: "8px",
+  },
+
+  historyRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: "10px",
+    padding: "14px 0",
+    borderBottom:
+      "1px solid #edf0f3",
+    animation:
+      "historyIn .3s ease both",
+  },
+
+  historyLeft: {
+    minWidth: 0,
+    display: "flex",
+    alignItems: "center",
+    gap: "11px",
+  },
+
+  historyIcon: {
+    width: "38px",
+    height: "38px",
+    borderRadius: "12px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "15px",
+    fontWeight: 900,
+    flexShrink: 0,
+  },
+
+  historyAmount: {
+    fontSize: "17px",
+    display: "block",
+  },
+
+  historyDate: {
+    color: "#929ca5",
+    fontSize: "10px",
+    marginTop: "4px",
+    fontFamily:
+      "Arial, sans-serif",
+  },
+
+  status: {
+    padding: "6px 9px",
+    borderRadius: "20px",
+    fontSize: "10px",
+    fontWeight: 800,
+    whiteSpace: "nowrap",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: "65px",
+    fontFamily:
+      "Arial, sans-serif",
+  },
+
+  empty: {
+    textAlign: "center",
+    color: "#707b85",
+    padding:
+      "28px 10px 18px",
+  },
+
+  emptyIcon: {
+    width: "55px",
+    height: "55px",
+    borderRadius: "18px",
+    margin:
+      "0 auto 10px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "#f3f5f8",
+    fontSize: "27px",
+  },
+
+  footer: {
+    textAlign: "center",
+    color: "#9aa3ab",
+    fontSize: "10px",
+    lineHeight: 1.6,
+    padding:
+      "4px 10px 10px",
+    fontFamily:
+      "Arial, sans-serif",
+  },
+
+  footerBrand: {
+    fontWeight: 800,
+    letterSpacing: "1px",
+    color: "#78838d",
+    marginBottom: "2px",
+  },
+};
