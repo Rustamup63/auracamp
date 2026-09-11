@@ -1,70 +1,94 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { useRouter } from "next/navigation";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+  {
+    auth: {
+      flowType: "pkce",
+      persistSession: true,
+      autoRefreshToken: true,
+    },
+  }
 );
 
 export default function AuthCallback() {
-  const router = useRouter();
-  const [message, setMessage] = useState("Signing you in...");
-
   useEffect(() => {
-    async function completeLogin() {
-      const params = new URLSearchParams(window.location.search);
-      const code = params.get("code");
+    let mounted = true;
 
-      if (!code) {
-        setMessage("Authentication code missing.");
-        return;
+    async function handleCallback() {
+      try {
+        const params =
+          new URLSearchParams(
+            window.location.search
+          );
+
+        const code =
+          params.get("code");
+
+        if (code) {
+          const { error } =
+            await supabase.auth.exchangeCodeForSession(
+              code
+            );
+
+          if (error) {
+            console.error(
+              "Auth callback error:",
+              error
+            );
+
+            if (mounted) {
+              window.location.replace(
+                "/login"
+              );
+            }
+
+            return;
+          }
+        }
+
+        const {
+          data: { session },
+        } =
+          await supabase.auth.getSession();
+
+        if (!session) {
+          window.location.replace(
+            "/login"
+          );
+          return;
+        }
+
+        /*
+         * IMPORTANT:
+         * Always enter the same AURA CAMP
+         * mobile-app shell after login.
+         */
+        window.location.replace("/");
+      } catch (error) {
+        console.error(
+          "Callback error:",
+          error
+        );
+
+        if (mounted) {
+          window.location.replace(
+            "/login"
+          );
+        }
       }
-
-      const { error } =
-        await supabase.auth.exchangeCodeForSession(code);
-
-      if (error) {
-        console.error(error);
-        setMessage("Login failed. Please try again.");
-        return;
-      }
-
-      const {
-  data: { user },
-} = await supabase.auth.getUser();
-
-if (!user) {
-  router.replace("/");
-  return;
-}
-
-const { data: admin } = await supabase
-  .from("admin_users")
-  .select("id, role, is_active")
-  .eq("id", user.id)
-  .eq("is_active", true)
-  .maybeSingle();
-
-if (admin) {
-  setMessage("Admin login successful. Opening Admin Panel...");
-
-  setTimeout(() => {
-    router.replace("/admin");
-  }, 500);
-} else {
-  setMessage("Login successful. Opening AURACAMP...");
-
-  setTimeout(() => {
-    router.replace("/");
-  }, 500);
-}
     }
 
-    completeLogin();
-  }, [router]);
+    handleCallback();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   return (
     <main
@@ -73,25 +97,81 @@ if (admin) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "#f6f7fb",
-        fontFamily: "Arial, sans-serif",
-        padding: 20,
+        background:
+          "linear-gradient(145deg,#f1fbfc,#f7fbff,#faf7ff)",
+        fontFamily:
+          "system-ui, sans-serif",
       }}
     >
       <div
         style={{
+          width: "280px",
+          padding: "28px",
+          borderRadius: "24px",
           background: "#fff",
-          padding: 35,
-          borderRadius: 20,
           textAlign: "center",
-          maxWidth: 380,
-          width: "100%",
-          boxShadow: "0 10px 35px rgba(0,0,0,0.08)",
+          boxShadow:
+            "0 20px 60px rgba(30,64,175,.10)",
         }}
       >
-        <h1 style={{ marginBottom: 10 }}>AURACAMP</h1>
-        <p style={{ color: "#666" }}>{message}</p>
+        <div
+          style={{
+            fontSize: "24px",
+            fontWeight: 900,
+            marginBottom: "16px",
+          }}
+        >
+          <span
+            style={{
+              color: "#111827",
+            }}
+          >
+            AURA
+          </span>{" "}
+          <span
+            style={{
+              color: "#16a34a",
+            }}
+          >
+            CAMP
+          </span>
+        </div>
+
+        <div
+          style={{
+            width: "30px",
+            height: "30px",
+            margin: "0 auto 13px",
+            border:
+              "3px solid #e5e7eb",
+            borderTopColor:
+              "#155eef",
+            borderRightColor:
+              "#16a34a",
+            borderRadius: "50%",
+            animation:
+              "spin .7s linear infinite",
+          }}
+        />
+
+        <p
+          style={{
+            margin: 0,
+            color: "#71808a",
+            fontSize: "11px",
+          }}
+        >
+          Opening Aura Camp...
+        </p>
       </div>
+
+      <style>{`
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+      `}</style>
     </main>
   );
 }
